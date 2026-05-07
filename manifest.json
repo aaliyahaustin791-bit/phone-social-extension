@@ -1,0 +1,9 @@
+{
+  "name": "PhoneSocial",
+  "version": "0.1.1",
+  "author": "aaliyahaustin791-bit",
+  "description": "Per-chat phone simulator: SMS/calls/contacts from NPCs, no data bleed.",
+  "main": "index.js",
+  "type": "third-party",
+  "icon": "📱"
+}
