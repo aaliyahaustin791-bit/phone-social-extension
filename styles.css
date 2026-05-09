@@ -1,100 +1,208 @@
-/* PhoneSocial Styles - Mobile-friendly, dark theme */
-.ps-panel {
-    position: fixed !important;
-    top: 10% !important;
-    right: 5% !important;
-    width: 90vw !important;
-    max-width: 400px !important;
-    height: 80vh !important;
-    background: rgba(0,0,0,0.95) !important;
-    color: white !important;
-    z-index: 9999 !important;
-    border: 2px solid #4f46e5 !important;
-    border-radius: 12px !important;
-    padding: 15px !important;
-    font-family: sans-serif !important;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
-    overflow: hidden !important;
+/* PhoneSocial — mobile-friendly floating phone UI */
+
+#phonesocial-btn {
+    position: fixed;
+    right: 16px;
+    bottom: 90px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    font-size: 26px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    z-index: 9998;
+    cursor: pointer;
+}
+#phonesocial-btn:active { transform: scale(0.95); }
+
+#phonesocial-panel {
+    position: fixed;
+    right: 16px;
+    bottom: 160px;
+    width: min(360px, calc(100vw - 32px));
+    height: min(560px, calc(100vh - 200px));
+    background: #111827;
+    color: #f3f4f6;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: system-ui, sans-serif;
+    font-size: 14px;
 }
 
-.ps-panel h3 {
-    margin: 0 0 10px 0 !important;
-    color: #4f46e5 !important;
-    text-align: center !important;
+.ps-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #1f2937;
+    border-bottom: 1px solid #374151;
+}
+.ps-title { font-weight: 600; }
+.ps-close {
+    background: transparent;
+    border: none;
+    color: #f3f4f6;
+    font-size: 18px;
+    cursor: pointer;
 }
 
-.ps-section {
-    margin-bottom: 10px !important;
-    padding: 8px !important;
-    border: 1px solid #333 !important;
-    border-radius: 6px !important;
-    max-height: 150px !important;
-    overflow-y: auto !important;
+.ps-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
 }
 
-.ps-contact {
-    padding: 5px !important;
-    cursor: pointer !important;
-    border-bottom: 1px solid #444 !important;
+.ps-nav {
+    display: flex;
+    border-top: 1px solid #374151;
+}
+.ps-nav button {
+    flex: 1;
+    padding: 10px 0;
+    background: #1f2937;
+    color: #f3f4f6;
+    border: none;
+    border-right: 1px solid #374151;
+    cursor: pointer;
+    font-size: 13px;
+}
+.ps-nav button:last-child { border-right: none; }
+.ps-nav button:active { background: #374151; }
+
+.ps-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.ps-list li {
+    padding: 10px 12px;
+    border-bottom: 1px solid #1f2937;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.ps-list li:active { background: #1f2937; }
+.ps-list li b { color: #f9fafb; }
+.ps-list li span { color: #9ca3af; font-size: 12px; }
+.ps-list li small { color: #6b7280; font-size: 11px; }
+
+.ps-empty, .ps-hint {
+    color: #9ca3af;
+    text-align: center;
+    padding: 20px 10px;
 }
 
-.ps-contact:hover {
-    background: #4f46e5 !important;
+.ps-thread-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid #374151;
+}
+.ps-thread-head button {
+    background: transparent;
+    border: none;
+    color: #f3f4f6;
+    font-size: 18px;
+    cursor: pointer;
 }
 
-.ps-contact small {
-    color: #aaa !important;
+.ps-thread {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 0;
+}
+.ps-msg {
+    max-width: 78%;
+    padding: 8px 12px;
+    border-radius: 14px;
+    word-wrap: break-word;
+}
+.ps-me {
+    background: #2563eb;
+    color: #fff;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+}
+.ps-them {
+    background: #374151;
+    color: #f3f4f6;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
 }
 
-.sent {
-    text-align: right !important;
-    color: #4f46e5 !important;
+.ps-compose {
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    border-top: 1px solid #374151;
+}
+.ps-compose input {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 18px;
+    border: 1px solid #374151;
+    background: #1f2937;
+    color: #f3f4f6;
+}
+.ps-compose button {
+    padding: 8px 14px;
+    border-radius: 18px;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
 }
 
-.received {
-    text-align: left !important;
-    color: #10b981 !important;
+.ps-dial { padding: 10px; }
+.ps-dial-display {
+    font-size: 24px;
+    text-align: center;
+    padding: 14px;
+    margin-bottom: 10px;
+    background: #1f2937;
+    border-radius: 10px;
+    letter-spacing: 2px;
 }
-
-.ps-input {
-    width: 100% !important;
-    padding: 8px !important;
-    margin-bottom: 5px !important;
-    background: #222 !important;
-    border: 1px solid #444 !important;
-    border-radius: 6px !important;
-    color: white !important;
+.ps-dial-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
 }
-
-.ps-btn {
-    width: 100% !important;
-    padding: 10px !important;
-    background: linear-gradient(45deg, #4f46e5, #7c3aed) !important;
-    border: none !important;
-    border-radius: 6px !important;
-    color: white !important;
-    font-weight: bold !important;
-    cursor: pointer !important;
+.ps-dial-pad button {
+    padding: 14px 0;
+    font-size: 20px;
+    background: #1f2937;
+    color: #f3f4f6;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    cursor: pointer;
 }
-
-.ps-btn:hover {
-    opacity: 0.9 !important;
+.ps-dial-pad button:active { background: #374151; }
+.ps-dial-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
 }
-
-@media (max-width: 768px) {
-    .ps-panel {
-        right: 2% !important;
-        left: 2% !important;
-        top: 5% !important;
-        width: 96% !important;
-        height: 90vh !important;
-    }
+.ps-dial-actions button {
+    flex: 1;
+    padding: 12px 0;
+    border-radius: 10px;
+    border: none;
+    background: #374151;
+    color: #f3f4f6;
+    cursor: pointer;
+    font-size: 16px;
 }
-
-/* ST topmenu button */
-#ps-toggle {
-    background: #4f46e5 !important;
-    color: white !important;
-    margin-left: 5px !important;
-    font-size: 16px !important;
+.ps-dial-actions .ps-call {
+    background: #16a34a;
+    color: #fff;
 }
