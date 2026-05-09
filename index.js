@@ -353,7 +353,16 @@
             tries++;
             if (hookEvents() || tries > 40) clearInterval(t);
         }, 500);
-        console.log('[PhoneSocial] ✅ initialized');
+
+        // Self-healing: if ST or another extension removes our button, re-add it
+        setInterval(() => {
+            if (!document.getElementById('phonesocial-btn')) {
+                console.warn('[PhoneSocial] button missing — re-attaching');
+                ensureButton();
+            }
+        }, 2000);
+
+        console.log('[PhoneSocial] ✅ initialized; button in DOM:', !!document.getElementById('phonesocial-btn'));
     }
 
     if (document.readyState === 'loading') {
