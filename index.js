@@ -103,6 +103,10 @@
         btn.textContent = '📱';
         btn.title = 'PhoneSocial';
         btn.addEventListener('click', togglePanel);
+        btn.addEventListener('touchend', (e) => {
+            e.preventDefault(); // Prevent double-firing on mobile
+            togglePanel();
+        });
         // Inline-style fallback that uses viewport units directly.
         // This bypasses any ancestor `transform`/`filter`/`will-change` that
         // would otherwise turn `position:fixed` into a containing-block-relative
