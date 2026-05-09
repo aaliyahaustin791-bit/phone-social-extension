@@ -100,22 +100,49 @@
         if (document.getElementById('phonesocial-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'phonesocial-btn';
-        btn.type = 'button';
         btn.textContent = '📱';
         btn.title = 'PhoneSocial';
-        btn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('[PhoneSocial] 🔘 button clicked');
-            togglePanel();
-        });
-        btn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('[PhoneSocial] 👆 button touched');
-            togglePanel();
-        });
-        document.body.appendChild(btn);
+        btn.addEventListener('click', togglePanel);
+        // Inline-style fallback that uses viewport units directly.
+        // This bypasses any ancestor `transform`/`filter`/`will-change` that
+        // would otherwise turn `position:fixed` into a containing-block-relative
+        // positioning (which on some ST mobile layouts pushed the button to
+        // x=827, off-screen).
+        btn.style.cssText = [
+            'position:fixed',
+            'left:calc(100vw - 64px)',
+            'top:80px',
+            'right:auto',
+            'bottom:auto',
+            'width:52px',
+            'height:52px',
+            'z-index:2147483647',
+            'display:flex',
+            'align-items:center',
+            'justify-content:center',
+            'border-radius:50%',
+            'border:2px solid #fff',
+            'background:#2563eb',
+            'color:#fff',
+            'font-size:24px',
+            'line-height:1',
+            'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
+            'cursor:pointer',
+            'padding:0',
+            'margin:0',
+            'visibility:visible',
+            'opacity:1',
+            'pointer-events:auto',
+        ].join(';') + ';';
+        // Append to <html> instead of <body> — escapes any body-level transforms.
+        (document.documentElement || document.body).appendChild(btn);
+        // Re-anchor on resize/orientation change.
+        const reposition = () => {
+            btn.style.left = 'calc(100vw - 64px)';
+            btn.style.top = '80px';
+        };
+        window.addEventListener('resize', reposition, { passive: true });
+        window.addEventListener('orientationchange', reposition, { passive: true });
     }
 
     function ensurePanel() {
