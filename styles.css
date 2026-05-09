@@ -2,9 +2,9 @@
 
 #phonesocial-btn {
     position: fixed !important;
-    /* Use left+transform instead of right: works even if document is wider than viewport */
-    left: auto !important;
-    right: 12px !important;
+    /* Anchor to viewport via calc(100vw) — `right:` can fail when document is wider than viewport on mobile */
+    left: calc(100vw - 64px) !important;
+    right: auto !important;
     top: 80px !important;
     bottom: auto !important;
     width: 52px !important;
