@@ -1,9 +1,15 @@
 {
+  "display_name": "PhoneSocial",
   "name": "PhoneSocial",
-  "version": "0.1.1",
+  "loading_order": 10,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "styles.css",
   "author": "aaliyahaustin791-bit",
-  "description": "Per-chat phone simulator: SMS/calls/contacts from NPCs, no data bleed.",
-  "main": "index.js",
+  "version": "0.2.0",
+  "homePage": "https://github.com/aaliyahaustin791-bit/phone-social-extension",
+  "auto_update": true,
   "type": "third-party",
-  "icon": "📱"
+  "description": "Per-chat phone simulator: SMS/calls/contacts from NPCs. Floating 📱 button, mobile-friendly, no data bleed between chats."
 }
