@@ -100,9 +100,21 @@
         if (document.getElementById('phonesocial-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'phonesocial-btn';
+        btn.type = 'button';
         btn.textContent = '📱';
         btn.title = 'PhoneSocial';
-        btn.addEventListener('click', togglePanel);
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[PhoneSocial] 🔘 button clicked');
+            togglePanel();
+        });
+        btn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[PhoneSocial] 👆 button touched');
+            togglePanel();
+        });
         document.body.appendChild(btn);
     }
 

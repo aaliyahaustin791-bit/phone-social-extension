@@ -28,21 +28,25 @@
 #phonesocial-btn:active { transform: scale(0.95); }
 
 #phonesocial-panel {
-    position: fixed;
-    right: 16px;
-    bottom: 160px;
-    width: min(360px, calc(100vw - 32px));
-    height: min(560px, calc(100vh - 200px));
-    background: #111827;
-    color: #f3f4f6;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    font-family: system-ui, sans-serif;
-    font-size: 14px;
+    position: fixed !important;
+    right: 12px !important;
+    top: 140px !important;
+    bottom: auto !important;
+    left: auto !important;
+    width: min(360px, calc(100vw - 24px)) !important;
+    height: min(560px, calc(100vh - 160px)) !important;
+    background: #111827 !important;
+    color: #f3f4f6 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
+    z-index: 2147483646 !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    font-family: system-ui, sans-serif !important;
+    font-size: 14px !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
 }
 
 .ps-header {
