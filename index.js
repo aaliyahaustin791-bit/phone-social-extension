@@ -100,13 +100,17 @@
         if (document.getElementById('phonesocial-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'phonesocial-btn';
+        btn.type = 'button'; // critical on mobile to avoid form submit
         btn.textContent = '📱';
         btn.title = 'PhoneSocial';
-        btn.addEventListener('click', togglePanel);
-        btn.addEventListener('touchend', (e) => {
-            e.preventDefault(); // Prevent double-firing on mobile
+        const handler = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[PhoneSocial] button handler fired');
             togglePanel();
-        });
+        };
+        btn.addEventListener('click', handler);
+        btn.addEventListener('touchend', handler);
         // Inline-style fallback that uses viewport units directly.
         // This bypasses any ancestor `transform`/`filter`/`will-change` that
         // would otherwise turn `position:fixed` into a containing-block-relative
@@ -154,7 +158,26 @@
         if (panel) return panel;
         panel = document.createElement('div');
         panel.id = 'phonesocial-panel';
-        panel.style.display = 'none';
+        panel.style.cssText = [
+            'position:fixed',
+            'left:50%',
+            'top:50%',
+            'transform:translate(-50%,-50%)',
+            'width:92vw',
+            'max-width:380px',
+            'height:70vh',
+            'max-height:560px',
+            'background:#111827',
+            'color:#e5e7eb',
+            'border:1px solid #374151',
+            'border-radius:16px',
+            'box-shadow:0 20px 25px -5px rgb(0 0 0 / 0.1),0 8px 10px -6px rgb(0 0 0 / 0.1)',
+            'z-index:2147483647',
+            'display:none',
+            'flex-direction:column',
+            'overflow:hidden',
+            'font-family:system-ui,-apple-system,sans-serif'
+        ].join(';') + ';';
         document.body.appendChild(panel);
         return panel;
     }
