@@ -289,7 +289,11 @@
             #phonesocial-panel .ps-close { width:40px; height:40px; border-radius:50%; border:none; background:rgba(255,255,255,0.9); color:#7c3aed; font-size:18px; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
             /* Hide floating button when panel is open */
             #phonesocial-btn[data-hidden="true"] { display:none !important; pointer-events:none !important; }
-            #phonesocial-panel .ps-body { flex:1; overflow-y:auto; padding:16px 12px; background:linear-gradient(to bottom, #f5f3ff, #fdf2f8); }
+            #phonesocial-panel .ps-body { flex:1; overflow-y:auto; padding:16px 12px; background:#ffffff; }
+            #phonesocial-panel .ps-nav { display:flex; justify-content:space-around; align-items:center; padding:10px 6px; background:#ede9fe; border-top:1px solid #d8b4fe; }
+            #phonesocial-panel .ps-nav button { background:transparent; border:none; color:#a855f7; font-size:14px; padding:8px 12px; border-radius:8px; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+            #phonesocial-panel .ps-nav button:active { background:rgba(168,85,247,0.15); }
+            #phonesocial-panel .ps-dial { display:flex; flex-direction:column; min-height:100%; justify-content:space-between; padding-bottom:8px; }
             #phonesocial-panel .ps-home { text-align:center; padding:20px 10px; color:#6b21a8; }
             #phonesocial-panel .ps-hint { font-size:12px; color:#c084fc; margin-top:16px; font-style:italic; }
             #phonesocial-panel .ps-app-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:240px; margin:0 auto; }

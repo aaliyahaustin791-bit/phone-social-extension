@@ -45,7 +45,7 @@
     height: 580px !important;
     max-width: 92vw !important;
     max-height: 85vh !important;
-    background: transparent !important;
+    background: #ede9fe !important;
     background-image: none !important;
     color: #1f2937 !important;
     border: none !important;
@@ -127,6 +127,15 @@
     padding: 8px 4px 16px;
     background: transparent;
     gap: 8px;
+}
+
+#phonesocial-panel .ps-nav {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 10px 6px;
+    background: #ede9fe !important;
+    border-top: 1px solid #d8b4fe !important;
 }
 .dock-btn {
     width: 48px;
