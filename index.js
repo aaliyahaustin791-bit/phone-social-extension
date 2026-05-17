@@ -285,7 +285,8 @@
             #phonesocial-panel { border-radius:28px !important; overflow:hidden !important; border:none !important; }
             #phonesocial-panel .ps-header { display:flex; justify-content:center; align-items:center; padding:8px 18px; background:linear-gradient(135deg,#ede9fe,#fdf4ff); }
             #phonesocial-panel .ps-title { font-size:12px; font-weight:600; color:#a855f7; letter-spacing:1px; opacity:0.7; }
-            #phonesocial-panel .ps-close { width:28px; height:28px; border-radius:50%; border:none; background:rgba(255,255,255,0.8); color:#7c3aed; font-size:16px; cursor:pointer; }
+            #phonesocial-panel .ps-close { width:40px; height:40px; border-radius:50%; border:none; background:rgba(255,255,255,0.9); color:#7c3aed; font-size:18px; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+            #phonesocial-btn[data-hidden="true"] { display:none !important; pointer-events:none !important; }
             #phonesocial-panel .ps-body { flex:1; overflow-y:auto; padding:16px 12px; background:linear-gradient(to bottom, #f5f3ff, #fdf2f8); }
             #phonesocial-panel .ps-home { text-align:center; padding:20px 10px; color:#6b21a8; }
             #phonesocial-panel .ps-hint { font-size:12px; color:#c084fc; margin-top:16px; font-style:italic; }
@@ -360,7 +361,7 @@
         panel.innerHTML = `
             <div class="ps-header">
                 <span class="ps-title">📱 PhoneSocial</span>
-                <button class="ps-close" data-act="close">✕</button>
+                <button class="ps-close" id="ps-close-btn" type="button">✕</button>
             </div>
             <div class="ps-body">${body}</div>
             <div class="ps-nav">
