@@ -287,6 +287,7 @@
             #phonesocial-panel .ps-header { display:flex; justify-content:center; align-items:center; padding:8px 18px; background:linear-gradient(135deg,#ede9fe,#fdf4ff); }
             #phonesocial-panel .ps-title { font-size:12px; font-weight:600; color:#a855f7; letter-spacing:1px; opacity:0.7; }
             #phonesocial-panel .ps-close { width:40px; height:40px; border-radius:50%; border:none; background:rgba(255,255,255,0.9); color:#7c3aed; font-size:18px; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+            /* Hide floating button when panel is open */
             #phonesocial-btn[data-hidden="true"] { display:none !important; pointer-events:none !important; }
             #phonesocial-panel .ps-body { flex:1; overflow-y:auto; padding:16px 12px; background:linear-gradient(to bottom, #f5f3ff, #fdf2f8); }
             #phonesocial-panel .ps-home { text-align:center; padding:20px 10px; color:#6b21a8; }
@@ -332,8 +333,12 @@
         const panel = ensurePanel();
         const btn = document.getElementById('phonesocial-btn');
         if (isPanelOpen) {
-            // Close
+            // Close — use multiple visual cues for mobile reliability
+        if (isPanelOpen) {
+            // Close — opacity/pointer-events as guaranteed fallback to flaky transform
             panel.style.transform = 'translateX(100%)';
+            panel.style.opacity = '0';
+            panel.style.pointerEvents = 'none';
             isPanelOpen = false;
             if (btn) btn.removeAttribute('data-hidden');
             setTimeout(() => {
@@ -348,6 +353,10 @@
             panel.style.display = 'flex';
             void panel.offsetWidth; // force reflow
             panel.style.transform = 'translateX(0)';
+            panel.style.opacity = '1';
+            panel.style.pointerEvents = 'auto';
+            panel.style.opacity = '1';
+            panel.style.pointerEvents = 'auto';
             if (btn) btn.setAttribute('data-hidden', 'true');
         }
     }
@@ -383,6 +392,12 @@
             </div>
         `;
         bindPanel(panel);
+
+        // Wire up close button once per render using the shared doClose handler
+        const closeBtn = panel.querySelector('#ps-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('pointerdown', doClose, { passive: false });
+        }
     }
 
     function viewHome() {
