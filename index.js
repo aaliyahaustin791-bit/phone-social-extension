@@ -333,17 +333,13 @@
         const panel = ensurePanel();
         const btn = document.getElementById('phonesocial-btn');
         if (isPanelOpen) {
-            // Close — use multiple visual cues for mobile reliability
-        if (isPanelOpen) {
             // Close — opacity/pointer-events as guaranteed fallback to flaky transform
             panel.style.transform = 'translateX(100%)';
             panel.style.opacity = '0';
             panel.style.pointerEvents = 'none';
             isPanelOpen = false;
             if (btn) btn.removeAttribute('data-hidden');
-            setTimeout(() => {
-                panel.style.display = 'none';
-            }, 260);
+            setTimeout(() => { panel.style.display = 'none'; }, 260);
         } else {
             // Open
             harvestNPCs();
@@ -353,8 +349,6 @@
             panel.style.display = 'flex';
             void panel.offsetWidth; // force reflow
             panel.style.transform = 'translateX(0)';
-            panel.style.opacity = '1';
-            panel.style.pointerEvents = 'auto';
             panel.style.opacity = '1';
             panel.style.pointerEvents = 'auto';
             if (btn) btn.setAttribute('data-hidden', 'true');
