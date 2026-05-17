@@ -315,14 +315,17 @@
             #phonesocial-panel #ps-input { flex:1; border:1px solid #e9d5ff; border-radius:20px; padding:8px 14px; background:rgba(255,255,255,0.9); color:#581c87; outline:none; }
             #phonesocial-panel .ps-compose button { background:#a855f7; color:#fff; border:none; border-radius:20px; padding:8px 16px; font-weight:600; cursor:pointer; }
             #phonesocial-panel .ps-dial { text-align:center; padding:12px; }
-            #phonesocial-panel .ps-dial-display { font-size:28px; font-weight:700; color:#581c87; padding:20px 0; min-height:40px; letter-spacing:2px; }
-            #phonesocial-panel .ps-dial-pad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
-            #phonesocial-panel .ps-dial-pad button { height:58px; border-radius:50%; border:none; background:rgba(255,255,255,0.8); font-size:22px; font-weight:600; color:#6b21a8; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.06); }
-            #phonesocial-panel .ps-dial-pad button:active { background:#f3e8ff; }
+            #phonesocial-panel .ps-dial-pad { display:grid; grid-template-columns:repeat(3,64px); gap:12px; justify-content:center; }
+            #phonesocial-panel .ps-dial-key { width:64px; height:64px; border-radius:50%; border:none; background:rgba(255,255,255,0.85); cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.08); display:flex; flex-direction:column; align-items:center; justify-content:center; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+            #phonesocial-panel .ps-dial-key:active { background:#ede9fe; }
+            #phonesocial-panel .ps-dial-key-num { font-size:24px; font-weight:700; color:#6b21a8; line-height:1; margin-bottom:1px; }
+            #phonesocial-panel .ps-dial-key-sub { font-size:9px; font-weight:600; color:#a78bfa; letter-spacing:2px; line-height:1; }
             #phonesocial-panel .ps-dial-actions { display:flex; justify-content:center; gap:12px; padding:16px; }
-            #phonesocial-panel .ps-call { background:linear-gradient(135deg,#4ade80,#22c55e); color:#fff; border:none; border-radius:20px; padding:10px 24px; font-size:16px; font-weight:700; cursor:pointer; }
-            #phonesocial-panel [data-act="dial-clear"] { background:#f3e8ff; color:#581c87; border:none; border-radius:20px; padding:10px 20px; font-size:18px; cursor:pointer; }
-            #phonesocial-panel .ps-nav { display:flex; justify-content:space-around; padding:10px 6px; background:#fdf4ff; border-top:1px solid #f3e8ff; }
+            #phonesocial-panel .ps-call { background:linear-gradient(135deg,#4ade80,#22c55e); color:#fff; border:none; border-radius:50%; width:64px; height:64px; font-size:14px; font-weight:700; cursor:pointer; box-shadow:0 3px 10px rgba(74,222,128,0.4); }
+            #phonesocial-panel .ps-call:active { background:#22c55e; }
+            #phonesocial-panel [data-act="dial-clear"] { background:rgba(255,255,255,0.85); color:#6b21a8; border:none; border-radius:50%; width:64px; height:64px; font-size:22px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+            #phonesocial-panel [data-act="dial-clear"]:active { background:#ede9fe; }
+            #panelsocial-panel .ps-nav { display:flex; justify-content:space-around; padding:10px 6px; background:#fdf4ff; border-top:1px solid #f3e8ff; }
             #phonesocial-panel .ps-nav button { background:transparent; border:none; color:#a855f7; font-size:13px; font-weight:600; padding:6px 10px; border-radius:12px; cursor:pointer; }
             #phonesocial-panel .ps-nav button:active { background:rgba(168,85,247,0.15); }
         `;
@@ -499,17 +502,21 @@
     }
 
     function viewDial() {
+        const keyMap = { '1': '', '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO', '7': 'PQRS', '8': 'TUV', '9': 'WXYZ', '*': '', '0': '+', '#': '' };
         return `
             <div class="ps-dial">
                 <div class="ps-dial-display">${escape(state.dialBuf || '—')}</div>
                 <div class="ps-dial-pad">
                     ${'123456789*0#'.split('').map(k => `
-                        <button data-act="key" data-k="${k}">${k}</button>
+                        <button class="ps-dial-key" data-act="key" data-k="${k}">
+                            <span class="ps-dial-key-num">${k}</span>
+                            ${keyMap[k] ? `<span class="ps-dial-key-sub">${keyMap[k]}</span>` : ''}
+                        </button>
                     `).join('')}
                 </div>
                 <div class="ps-dial-actions">
                     <button data-act="dial-clear">⌫</button>
-                    <button data-act="dial-call" class="ps-call">Call</button>
+                    <button data-act="dial-call" class="ps-call">📞</button>
                 </div>
             </div>
         `;
