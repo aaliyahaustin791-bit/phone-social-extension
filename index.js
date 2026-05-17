@@ -350,7 +350,31 @@
             panel.style.opacity = '0';
             panel.style.pointerEvents = 'none';
             isPanelOpen = false;
-            if (btn) btn.removeAttribute('data-hidden');
+            if (btn) btn.style.cssText = [
+                'position:fixed',
+                'left:calc(100vw - 64px)',
+                'top:80px',
+                'right:auto',
+                'bottom:auto',
+                'width:52px',
+                'height:52px',
+                'z-index:10050',
+                'display:flex !important', // Force display
+                'align-items:center',
+                'justify-content:center',
+                'border-radius:50%',
+                'border:2px solid #fff',
+                'color:#fff',
+                'font-size:22px',
+                'line-height:1',
+                'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
+                'cursor:pointer',
+                'padding:0',
+                'margin:0',
+                'visibility:visible !important', // Force visibility
+                'opacity:1 !important', // Force opacity
+                'pointer-events:auto !important', // Force pointer events
+            ].join(';') + ';';
             setTimeout(() => { panel.style.display = 'none'; }, 260);
         } else {
             // Open
@@ -364,7 +388,7 @@
             panel.style.visibility = 'visible';
             panel.style.opacity = '1';
             panel.style.pointerEvents = 'auto';
-            if (btn) btn.setAttribute('data-hidden', 'true');
+            if (btn) btn.style.cssText = 'display:none !important; pointer-events:none !important; visibility:hidden !important; opacity:0 !important;';
         }
     }
 
