@@ -39,11 +39,12 @@
     }
 
     function getChatMeta() {
-        const ctx = getCtx();
-        if (!ctx) return null;
-        if (!ctx.chatMetadata) ctx.chatMetadata = {};
-        if (!ctx.chatMetadata[META_KEY]) ctx.chatMetadata[META_KEY] = {};
-        return ctx.chatMetadata[META_KEY];
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chatMetadata) return null;
+            if (!ctx.chatMetadata[META_KEY]) ctx.chatMetadata[META_KEY] = {};
+            return ctx.chatMetadata[META_KEY];
+        } catch (e) { return null; }
     }
 
     function saveMeta() {
@@ -71,18 +72,111 @@
     function harvestNPCs() {
         const ctx = getCtx();
         if (!ctx?.chat) return;
+        // Block the main character, user, chat name, and system noise
+        const charName = (ctx.name || '').trim().toLowerCase();
+        const chatName = (ctx.name1 || '').trim().toLowerCase();
+        const personaName = (ctx.chatMetadata?.user_name || '').trim().toLowerCase();
+        const blocked = new Set([charName, chatName, personaName, 'system', 'sillytavern system', 'narrator'].filter(Boolean));
+        const debug = [];
         const seen = new Set(state.contacts.map(c => c.name.toLowerCase()));
         for (const msg of ctx.chat) {
             if (!msg || msg.is_user || msg.is_system) continue;
             const name = (msg.name || '').trim();
-            if (!name || seen.has(name.toLowerCase())) continue;
-            seen.add(name.toLowerCase());
+            if (!name) continue;
+            const norm = name.toLowerCase();
+            if (blocked.has(norm)) { debug.push(`SKIP(blocked): "${name}"`); continue; }
+            if (seen.has(norm)) { debug.push(`SKIP(seen): "${name}"`); continue; }
+            seen.add(norm);
+            debug.push(`HARVEST: "${name}"`);
             state.contacts.push({
-                id: 'npc_' + name.toLowerCase().replace(/\s+/g, '_'),
+                id: 'npc_' + norm.replace(/\s+/g, '_'),
                 name,
                 number: genNumber(),
                 source: 'npc',
             });
+        }
+        if (debug.length) console.log('[PhoneSocial] harvestNPCs:', debug);
+        // Second pass: scan message text for named NPCs mentioned in prose/dialogue
+        try {
+            harvestNamesFromText(blocked, seen, debug);
+        } catch (_e) {
+            console.warn('[PhoneSocial] text harvest failed:', _e);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Name extraction from message prose (single-character chats)
+    // -------------------------------------------------------------------
+    function harvestNamesFromText(blocked, seen, debug) {
+        // Common English words that are capitalized but NOT names — filter aggressively
+        const commonWords = new Set([
+            'i','a','the','and','but','for','not','you','all','any','can','her','his','had',
+            'has','how','its','let','may','was','our','out','new','own','say','she','too',
+            'use','get','got','him','one','two','did','could','will','just','been','from',
+            'they','then','there','these','their','this','that','what','when','where','which',
+            'who','why','would','with','about','after','before','into','over','some',
+            // Narrative/narration words often capitalized in RP
+            'the','he','she','they','we','it','as','at','by','in','is','no','so','up',
+            'if','me','do','go','be','have','make','take','come','know','think','look',
+            'want','give','show','seem','help','through','many','much','more','most','very',
+            'back','down','still','even','each','also','well','only','very','just','like',
+            'time','year','people','way','day','man','world','life','hand','part','child',
+            'eye','woman','place','work','week','case','point','company','group','problem',
+            'fact','good','now','here','right','left','never','always','always','never',
+        ]);
+
+        // Patterns indicating a name follows (dialogue attribution, relationships)
+        const namePatterns = [
+            /(?:said|told|asked|replied|answered|muttered|whispered|shouted|called|yelled|sighed|laughed|smiled|glared|stared|watched)\s+(?:that\s+)?(?:a\s+)?(?:very\s+)?(?:the\s+)?([A-Z][a-z]{1,15})/g,
+            /(?:named|called|knows?|know|met|sees?|saw|found|followed|hugged|kissed|grabbed|pulled|pushed|hit|slapped)\s+(?:me|him|her|them|you)\s+(?:named\s+)?([A-Z][a-z]{1,15})/g,
+            /(?:his|her|their)\s+(?:girlfriend|boyfriend|sister|brother|mother|father|mom|dad|friend|partner|lover|roommate|classmate|enemy)\s+(?:is\s+|was\s+|named\s+)?([A-Z][a-z]{1,15})/g,
+            /(?:oh|hey|hello|hi)\s+,\s*([A-Z][a-z]{1,15})/g,
+            /(?:^|\s)[\""]([A-Z][a-z]{1,15})[\""]\s*(?:,?\s*(?:he|she|they)\s+(?:said|replied|asked|laughed|said|muttered|whispered))/g,
+        ];
+
+        const ctx = getCtx();
+        if (!ctx?.chat) return;
+
+        for (const msg of ctx.chat) {
+            if (!msg || msg.is_user || msg.is_system) continue;
+            const text = (msg.mes || msg.text || '');
+            if (!text) continue;
+
+            // Find all capitalized words (potential names)
+            const capWords = text.match(/\b[A-Z][a-z]{1,20}\b/g) || [];
+            for (const word of capWords) {
+                const norm = word.toLowerCase();
+                if (blocked.has(norm)) continue;
+                if (seen.has(norm)) continue;
+                if (commonWords.has(norm)) continue;
+                // Names should be 2+ chars and not too long
+                if (norm.length < 2) continue;
+
+                // Bonus confidence: check if word appears near name-indicating patterns
+                let confidence = 0;
+                for (const pat of namePatterns) {
+                    pat.lastIndex = 0;
+                    let m;
+                    while ((m = pat.exec(text)) !== null) {
+                        if (m[1] && m[1].toLowerCase() === norm) {
+                            confidence += 2;
+                        }
+                    }
+                }
+                // Also check if name appears in quotes (dialogue)
+                if (text.includes(`"${word}"`) || text.includes(`'${word}'`)) confidence += 1;
+
+                if (confidence >= 1) {
+                    seen.add(norm);
+                    debug.push(`TEXT harvest(💬${confidence}): "${word}"`);
+                    state.contacts.push({
+                        id: 'npc_' + norm.replace(/\s+/g, '_'),
+                        name: word,
+                        number: genNumber(),
+                        source: 'npc-text',
+                    });
+                }
+            }
         }
     }
 
@@ -130,9 +224,9 @@
             'justify-content:center',
             'border-radius:50%',
             'border:2px solid #fff',
-            'background:#2563eb',
+            'border:2px solid #fff',
             'color:#fff',
-            'font-size:24px',
+            'font-size:22px',
             'line-height:1',
             'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
             'cursor:pointer',
@@ -154,43 +248,102 @@
     }
 
     function ensurePanel() {
+        injectPastelTheme();
         let panel = document.getElementById('phonesocial-panel');
         if (panel) return panel;
         panel = document.createElement('div');
         panel.id = 'phonesocial-panel';
         panel.style.cssText = [
             'position:fixed',
-            'left:50%',
-            'top:50%',
-            'transform:translate(-50%,-50%)',
-            'width:92vw',
+            'top:0',
+            'right:0',
+            'bottom:0',
+            'width:85vw',
             'max-width:380px',
-            'height:70vh',
-            'max-height:560px',
-            'background:#111827',
-            'color:#e5e7eb',
-            'border:1px solid #374151',
-            'border-radius:16px',
-            'box-shadow:0 20px 25px -5px rgb(0 0 0 / 0.1),0 8px 10px -6px rgb(0 0 0 / 0.1)',
+            'background:linear-gradient(to bottom, #ede9fe, #fdf4ff)',
+            'color:#581c87',
+            'border:none',
+            'box-shadow:-4px 0 24px rgba(124, 58, 237, 0.15)',
             'z-index:2147483647',
             'display:none',
             'flex-direction:column',
             'overflow:hidden',
-            'font-family:system-ui,-apple-system,sans-serif'
+            'font-family:system-ui,-apple-system,sans-serif',
+            'transition:transform 0.25s ease-out',
+            'transform:translateX(100%)'
         ].join(';') + ';';
         document.body.appendChild(panel);
         return panel;
     }
 
+    function injectPastelTheme() {
+        if (document.getElementById('phonesocial-theme')) return;
+        const style = document.createElement('style');
+        style.id = 'phonesocial-theme';
+        style.textContent = `
+            /* Phone panel container - simulated phone look */
+            #phonesocial-panel { border-radius:28px !important; overflow:hidden !important; border:none !important; }
+            #phonesocial-panel .ps-header { display:flex; justify-content:center; align-items:center; padding:8px 18px; background:linear-gradient(135deg,#ede9fe,#fdf4ff); }
+            #phonesocial-panel .ps-title { font-size:12px; font-weight:600; color:#a855f7; letter-spacing:1px; opacity:0.7; }
+            #phonesocial-panel .ps-close { width:28px; height:28px; border-radius:50%; border:none; background:rgba(255,255,255,0.8); color:#7c3aed; font-size:16px; cursor:pointer; }
+            #phonesocial-panel .ps-body { flex:1; overflow-y:auto; padding:16px 12px; background:linear-gradient(to bottom, #f5f3ff, #fdf2f8); }
+            #phonesocial-panel .ps-home { text-align:center; padding:20px 10px; color:#6b21a8; }
+            #phonesocial-panel .ps-hint { font-size:12px; color:#c084fc; margin-top:16px; font-style:italic; }
+            #phonesocial-panel .ps-app-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:240px; margin:0 auto; }
+            #phonesocial-panel .ps-app { display:flex; flex-direction:column; align-items:center; justify-content:center; border-radius:16px; padding:14px 8px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.08); transition:transform 0.15s; min-height:72px; }
+            #phonesocial-panel .ps-app:active { transform:scale(0.92); }
+            #phonesocial-panel .ps-app-icon { font-size:24px; }
+            #phonesocial-panel .ps-app-label { font-size:10px; font-weight:600; color:#fff; margin-top:4px; text-shadow:0 1px 2px rgba(0,0,0,0.15); }
+            #phonesocial-panel .ps-list { list-style:none; padding:0; margin:0; }
+            #phonesocial-panel .ps-list li { background:rgba(255,255,255,0.85); border-radius:14px; padding:12px 16px; margin-bottom:10px; cursor:pointer; border:1px solid #f3e8ff; box-shadow:0 1px 4px rgba(0,0,0,0.04); transition:transform 0.15s; }
+            #phonesocial-panel .ps-list li:active { transform:scale(0.98); }
+            #phonesocial-panel .ps-list li b { color:#581c87; display:block; margin-bottom:2px; }
+            #phonesocial-panel .ps-list li span { font-size:12px; color:#a855f7; }
+            #phonesocial-panel .ps-list li small { font-size:11px; color:#d8b4fe; }
+            #phonesocial-panel .ps-empty { text-align:center; color:#c084fc; padding:30px; font-style:italic; }
+            #phonesocial-panel .ps-thread-head { display:flex; align-items:center; padding:10px 12px; background:#f3e8ff; border-radius:14px; margin-bottom:12px; }
+            #phonesocial-panel .ps-thread-head b { flex:1; text-align:center; color:#581c87; }
+            #phonesocial-panel .ps-thread-head button { background:#f3e8ff; border:none; width:32px; height:32px; border-radius:50%; font-size:16px; cursor:pointer; }
+            #phonesocial-panel .ps-thread { min-height:120px; margin-bottom:10px; }
+            #phonesocial-panel .ps-msg { max-width:80%; padding:8px 14px; border-radius:16px; margin:4px 0; font-size:14px; line-height:1.4; }
+            #phonesocial-panel .ps-msg.me { background:linear-gradient(135deg,#c084fc,#e879f9); color:#fff; margin-left:auto; border-bottom-right-radius:4px; }
+            #phonesocial-panel .ps-msg.them { background:rgba(255,255,255,0.9); color:#581c87; border-bottom-left-radius:4px; box-shadow:0 1px 3px rgba(0,0,0,0.08); }
+            #phonesocial-panel .ps-compose { display:flex; gap:8px; padding:10px; background:#f3e8ff; border-radius:20px; }
+            #phonesocial-panel #ps-input { flex:1; border:1px solid #e9d5ff; border-radius:20px; padding:8px 14px; background:rgba(255,255,255,0.9); color:#581c87; outline:none; }
+            #phonesocial-panel .ps-compose button { background:#a855f7; color:#fff; border:none; border-radius:20px; padding:8px 16px; font-weight:600; cursor:pointer; }
+            #phonesocial-panel .ps-dial { text-align:center; padding:12px; }
+            #phonesocial-panel .ps-dial-display { font-size:28px; font-weight:700; color:#581c87; padding:20px 0; min-height:40px; letter-spacing:2px; }
+            #phonesocial-panel .ps-dial-pad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+            #phonesocial-panel .ps-dial-pad button { height:58px; border-radius:50%; border:none; background:rgba(255,255,255,0.8); font-size:22px; font-weight:600; color:#6b21a8; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.06); }
+            #phonesocial-panel .ps-dial-pad button:active { background:#f3e8ff; }
+            #phonesocial-panel .ps-dial-actions { display:flex; justify-content:center; gap:12px; padding:16px; }
+            #phonesocial-panel .ps-call { background:linear-gradient(135deg,#4ade80,#22c55e); color:#fff; border:none; border-radius:20px; padding:10px 24px; font-size:16px; font-weight:700; cursor:pointer; }
+            #phonesocial-panel [data-act="dial-clear"] { background:#f3e8ff; color:#581c87; border:none; border-radius:20px; padding:10px 20px; font-size:18px; cursor:pointer; }
+            #phonesocial-panel .ps-nav { display:flex; justify-content:space-around; padding:10px 6px; background:#fdf4ff; border-top:1px solid #f3e8ff; }
+            #phonesocial-panel .ps-nav button { background:transparent; border:none; color:#a855f7; font-size:13px; font-weight:600; padding:6px 10px; border-radius:12px; cursor:pointer; }
+            #phonesocial-panel .ps-nav button:active { background:rgba(168,85,247,0.15); }
+        `;
+        document.head.appendChild(style);
+    }
+
     function togglePanel() {
         const panel = ensurePanel();
-        if (panel.style.display === 'none') {
+        const btn = document.getElementById('phonesocial-btn');
+        if (panel.style.display === 'none' || !panel.style.display) {
             harvestNPCs();
             saveMeta();
             render();
             panel.style.display = 'flex';
+            void panel.offsetWidth; // force reflow
+            panel.style.transform = 'translateX(0)';
+            if (btn) btn.setAttribute('data-hidden', 'true'); // hide button while panel open
         } else {
-            panel.style.display = 'none';
+            panel.style.transform = 'translateX(100%)';
+            setTimeout(() => {
+                panel.style.display = 'none';
+                panel.style.transform = 'translateX(100%)'; // reset for next open
+                if (btn) btn.removeAttribute('data-hidden'); // show button again
+            }, 260);
         }
     }
 
@@ -211,10 +364,10 @@
             </div>
             <div class="ps-body">${body}</div>
             <div class="ps-nav">
-                <button data-act="nav" data-view="home">Home</button>
-                <button data-act="nav" data-view="contacts">Contacts</button>
-                <button data-act="nav" data-view="sms">SMS</button>
-                <button data-act="nav" data-view="dial">Dial</button>
+                <button data-act="nav" data-view="dial">📞</button>
+                <button data-act="nav" data-view="sms">💬</button>
+                <button data-act="nav" data-view="contacts">👥</button>
+                <button data-act="nav" data-view="home">⚙️</button>
             </div>
         `;
         bindPanel(panel);
@@ -223,10 +376,45 @@
     function viewHome() {
         return `
             <div class="ps-home">
-                <p>Contacts: <b>${state.contacts.length}</b></p>
-                <p>Threads: <b>${Object.keys(state.threads).length}</b></p>
-                <p>Calls: <b>${state.callLog.length}</b></p>
-                <p class="ps-hint">Tap a tab below to start.</p>
+                <div class="ps-app-grid">
+                    <div class="ps-app" style="background:linear-gradient(135deg,#86efac,#4ade80)" data-act="nav" data-view="dial">
+                        <span class="ps-app-icon">📞</span>
+                        <span class="ps-app-label">Phone</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#fda4af,#fb7185)" data-act="nav" data-view="sms">
+                        <span class="ps-app-icon">💬</span>
+                        <span class="ps-app-label">Messages</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#93c5fd,#60a5fa)" data-act="nav" data-view="contacts">
+                        <span class="ps-app-icon">👥</span>
+                        <span class="ps-app-label">Contacts</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#fcd34d,#fbbf24)">
+                        <span class="ps-app-icon">🖼️</span>
+                        <span class="ps-app-label">Gallery</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)">
+                        <span class="ps-app-icon">📋</span>
+                        <span class="ps-app-label">Tasks</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#fecdd3,#fda4af)">
+                        <span class="ps-app-icon">⚙️</span>
+                        <span class="ps-app-label">Settings</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#bae6fd,#7dd3fc)">
+                        <span class="ps-app-icon">🎨</span>
+                        <span class="ps-app-label">Art</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#fef08a,#fde047)">
+                        <span class="ps-app-icon">📝</span>
+                        <span class="ps-app-label">Notes</span>
+                    </div>
+                    <div class="ps-app" style="background:linear-gradient(135deg,#fecaca,#f87171)">
+                        <span class="ps-app-icon">❤️</span>
+                        <span class="ps-app-label">Favorites</span>
+                    </div>
+                </div>
+                <p class="ps-hint">Tap an icon to open</p>
             </div>
         `;
     }
@@ -317,7 +505,10 @@
     // -------------------------------------------------------------------
     function bindPanel(panel) {
         panel.querySelectorAll('[data-act]').forEach(el => {
-            el.addEventListener('click', onAction);
+            el.removeEventListener('click', onAction);
+            el.removeEventListener('touchend', onAction);
+            el.addEventListener('click', onAction, { passive: false });
+            el.addEventListener('touchend', onAction, { passive: false });
         });
     }
 
@@ -326,7 +517,7 @@
         const act = el.getAttribute('data-act');
         switch (act) {
             case 'close':
-                document.getElementById('phonesocial-panel').style.display = 'none';
+                togglePanel();
                 return;
             case 'nav':
                 state.view = el.getAttribute('data-view');
@@ -392,11 +583,18 @@
     // Lifecycle
     // -------------------------------------------------------------------
     function onChatChanged() {
-        loadMeta();
-        harvestNPCs();
-        saveMeta();
-        const panel = document.getElementById('phonesocial-panel');
-        if (panel && panel.style.display !== 'none') render();
+        // Defer to next frame so ST's chat loading pipeline isn't blocked
+        requestAnimationFrame(() => {
+            try {
+                loadMeta();
+                harvestNPCs();
+                saveMeta();
+            } catch (e) {
+                console.error('[PhoneSocial] onChatChanged error:', e);
+            }
+            const panel = document.getElementById('phonesocial-panel');
+            if (panel && panel.style.display !== 'none') render();
+        });
     }
 
     function hookEvents() {
@@ -404,31 +602,41 @@
         if (!ctx?.eventSource || !ctx?.eventTypes) return false;
         ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, onChatChanged);
         ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, () => {
-            harvestNPCs();
-            saveMeta();
+            // Defer so message rendering completes first
+            setTimeout(() => {
+                try {
+                    harvestNPCs();
+                    saveMeta();
+                } catch (e) {
+                    console.error('[PhoneSocial] MESSAGE_RECEIVED error:', e);
+                }
+            }, 0);
         });
         return true;
     }
 
     function init() {
-        ensureButton();
-        ensurePanel();
-        loadMeta();
-        let tries = 0;
-        const t = setInterval(() => {
-            tries++;
-            if (hookEvents() || tries > 40) clearInterval(t);
-        }, 500);
+        // Defer ALL work to avoid blocking ST startup
+        setTimeout(() => {
+            ensureButton();
+            ensurePanel();
+            // Don't touch ctx/meta until CHAT_CHANGED fires — just register the listener
+            let tries = 0;
+            const t = setInterval(() => {
+                tries++;
+                if (hookEvents() || tries > 40) clearInterval(t);
+            }, 500);
 
-        // Self-healing: if ST or another extension removes our button, re-add it
-        setInterval(() => {
-            if (!document.getElementById('phonesocial-btn')) {
-                console.warn('[PhoneSocial] button missing — re-attaching');
-                ensureButton();
-            }
-        }, 2000);
+            // Self-healing: if ST or another extension removes our button, re-add it
+            setInterval(() => {
+                if (!document.getElementById('phonesocial-btn')) {
+                    console.warn('[PhoneSocial] button missing — re-attaching');
+                    ensureButton();
+                }
+            }, 2000);
 
-        console.log('[PhoneSocial] ✅ initialized; button in DOM:', !!document.getElementById('phonesocial-btn'));
+            console.log('[PhoneSocial] ✅ initialized (passive); btn:', !!document.getElementById('phonesocial-btn'));
+        }, 100);
     }
 
     if (document.readyState === 'loading') {
