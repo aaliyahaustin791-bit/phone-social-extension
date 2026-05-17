@@ -407,6 +407,7 @@
             case 'sms':      body = viewSmsList(); break;
             case 'thread':   body = viewThread(); break;
             case 'dial':     body = viewDial(); break;
+            case 'settings': body = viewSettings(); break;
             default:         body = viewHome();
         }
         panel.innerHTML = `
@@ -451,11 +452,7 @@
                         <span class="ps-app-icon">🖼️</span>
                         <span class="ps-app-label">Gallery</span>
                     </div>
-                    <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)">
-                        <span class="ps-app-icon">📋</span>
-                        <span class="ps-app-label">Tasks</span>
-                    </div>
-                    <div class="ps-app" style="background:linear-gradient(135deg,#fecdd3,#fda4af)">
+                    <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)" data-act="nav" data-view="settings">
                         <span class="ps-app-icon">⚙️</span>
                         <span class="ps-app-label">Settings</span>
                     </div>
@@ -556,6 +553,30 @@
         `;
     }
 
+    function viewSettings() {
+        const s = window.PhoneSocialSettings || {
+            apiUrl: 'https://api.openai.com/v1',
+            apiKey: '',
+            model: 'gpt-4o-mini',
+            systemPromptTemplate: 'You are {char}, responding via text message. Keep replies short and in character.'
+        };
+        return `
+            <div class="ps-settings" style="padding:12px">
+                <h3 style="margin:0 0 12px; color:#581c87">API Settings</h3>
+                <label style="display:block; margin:8px 0 4px; font-size:12px">API URL</label>
+                <input type="text" id="ps-set-url" value="${s.apiUrl}" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe">
+                <label style="display:block; margin:8px 0 4px; font-size:12px">API Key</label>
+                <input type="password" id="ps-set-key" value="${s.apiKey}" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe">
+                <label style="display:block; margin:8px 0 4px; font-size:12px">Model</label>
+                <input type="text" id="ps-set-model" value="${s.model}" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe">
+                <label style="display:block; margin:8px 0 4px; font-size:12px">System Prompt (use {char})</label>
+                <textarea id="ps-set-prompt" style="width:100%; height:80px; padding:8px; border-radius:8px; border:1px solid #d8b4fe">${s.systemPromptTemplate}</textarea>
+                <button data-act="save-settings" style="margin-top:12px; background:#a855f7; color:white; border:none; padding:10px 16px; border-radius:12px">Save Settings</button>
+                <div id="ps-settings-status" style="margin-top:8px; font-size:12px; color:#4ade80"></div>
+            </div>
+        `;
+    }
+
     function escape(s) {
         return String(s ?? '').replace(/[&<>"']/g, ch => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -627,6 +648,23 @@
                 saveMeta();
                 render();
                 return;
+            case 'save-settings': {
+                const url = document.getElementById('ps-set-url')?.value.trim();
+                const key = document.getElementById('ps-set-key')?.value.trim();
+                const model = document.getElementById('ps-set-model')?.value.trim();
+                const prompt = document.getElementById('ps-set-prompt')?.value.trim();
+                window.PhoneSocialSettings = { apiUrl: url, apiKey: key, model, systemPromptTemplate: prompt };
+                // persist via SillyTavern's settings system
+                if (window.extension_settings) {
+                    window.extension_settings.PhoneSocial = window.PhoneSocialSettings;
+                    if (typeof window.saveSettingsDebounced === 'function') {
+                        window.saveSettingsDebounced();
+                    }
+                }
+                const status = document.getElementById('ps-settings-status');
+                if (status) status.textContent = '✅ Saved! Reload extension to apply.';
+                return;
+            }
         }
     }
 
