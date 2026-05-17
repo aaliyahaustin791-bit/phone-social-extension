@@ -205,7 +205,9 @@
             togglePanel();
         };
         btn.addEventListener('click', handler);
-        btn.addEventListener('touchend', handler);
+        // DO NOT add touchend — on mobile the browser synthesizes click after touchend
+        // and double-firing causes: first touch opens+ hides btn, second click re-closes
+        // then re-opens panel with btn stuck hidden forever.
         // Inline-style fallback that uses viewport units directly.
         // This bypasses any ancestor `transform`/`filter`/`will-change` that
         // would otherwise turn `position:fixed` into a containing-block-relative
@@ -271,7 +273,10 @@
             'overflow:hidden',
             'font-family:system-ui,-apple-system,sans-serif',
             'transition:transform 0.25s ease-out',
-            'transform:translateX(100%)'
+            'transform:translateX(100%)',
+            'visibility:hidden',
+            'opacity:0',
+            'pointer-events:none'
         ].join(';') + ';';
         document.body.appendChild(panel);
         return panel;
@@ -356,6 +361,7 @@
             panel.style.display = 'flex';
             void panel.offsetWidth; // force reflow
             panel.style.transform = 'translateX(0)';
+            panel.style.visibility = 'visible';
             panel.style.opacity = '1';
             panel.style.pointerEvents = 'auto';
             if (btn) btn.setAttribute('data-hidden', 'true');
