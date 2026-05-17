@@ -14,6 +14,7 @@
     // Per-chat state (reset on every CHAT_CHANGED)
     // -------------------------------------------------------------------
     let state = freshState();
+    let isPanelOpen = false;
 
     function freshState() {
         return {
@@ -330,22 +331,32 @@
     function togglePanel() {
         const panel = ensurePanel();
         const btn = document.getElementById('phonesocial-btn');
-        if (panel.style.display === 'none' || !panel.style.display) {
+        if (isPanelOpen) {
+            // Close
+            panel.style.transform = 'translateX(100%)';
+            isPanelOpen = false;
+            if (btn) btn.removeAttribute('data-hidden');
+            setTimeout(() => {
+                panel.style.display = 'none';
+            }, 260);
+        } else {
+            // Open
             harvestNPCs();
             saveMeta();
             render();
+            isPanelOpen = true;
             panel.style.display = 'flex';
             void panel.offsetWidth; // force reflow
             panel.style.transform = 'translateX(0)';
-            if (btn) btn.setAttribute('data-hidden', 'true'); // hide button while panel open
-        } else {
-            panel.style.transform = 'translateX(100%)';
-            setTimeout(() => {
-                panel.style.display = 'none';
-                panel.style.transform = 'translateX(100%)'; // reset for next open
-                if (btn) btn.removeAttribute('data-hidden'); // show button again
-            }, 260);
+            if (btn) btn.setAttribute('data-hidden', 'true');
         }
+    }
+
+    // Close handler bound once — doesn't stack on re-render
+    function doClose(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (isPanelOpen) togglePanel();
     }
 
     function render() {
