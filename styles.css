@@ -20,7 +20,7 @@
     font-size: 24px !important;
     line-height: 1 !important;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6) !important;
-    z-index: 2147483647 !important;
+    z-index: 10000 !important;
     cursor: pointer !important;
     display: flex !important;
     align-items: center !important;
@@ -53,7 +53,7 @@
     outline: none !important;
     outline-width: 0 !important;
     box-shadow: none !important;
-    z-index: 2147483647 !important;
+    z-index: 10000 !important;
     display: flex !important;
     flex-direction: column !important;
     overflow: hidden !important;
