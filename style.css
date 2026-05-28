@@ -318,42 +318,6 @@
     line-height: 1;
     margin-top: 2px;
 }
-.ps-dial-actions {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    padding: 12px 8px 0;
-}
-.ps-dial-backspace,
-.ps-dial-call-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    border: none;
-    cursor: pointer;
-    margin: 0 auto;
-    transition: background 0.1s ease, transform 0.1s ease;
-}
-.ps-dial-backspace {
-    background: #d4c8e2;
-    color: #4B5563;
-}
-.ps-dial-backspace:active {
-    background: #b8a8d2;
-    transform: scale(0.94);
-}
-.ps-dial-call-btn {
-    background: #16a34a;
-    color: #fff;
-    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.3);
-}
-.ps-dial-call-btn:active {
-    background: #15803d;
-    transform: scale(0.94);
-}
 
 /* === Cute 3x3 Home Screen (Proposal 3) === */
 .ps-home {
