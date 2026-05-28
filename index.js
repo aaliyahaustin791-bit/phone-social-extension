@@ -45,6 +45,9 @@
             chirpPosts: [],    // [{id, author: {name, handle, isContact}, text, ts, likes, likedBy:[handle], comments: [{author: {name, handle}, text, ts}]}]
             chirpLastRefresh: 0,
             typingContactId: null,  // contact ID currently "typing" (shows animated dots)
+            voicemails: [],    // [{contactId, text, ts, heard: false}]
+            dialTab: 'keypad', // 'keypad' | 'recents'
+            incomingBanner: null, // {contactId, name, text, ts} — transient SMS popup
         };
     }
 
@@ -152,6 +155,7 @@ function cleanThreads(threads) {
         meta.contacts = contactsClean;
         meta.threads = state.threads;
         meta.callLog = state.callLog;
+        meta.voicemails = Array.isArray(state.voicemails) ? state.voicemails.slice(-20) : [];
         meta.settings = state.settings;
         meta.view = state.view;
         meta.viewHistory = Array.isArray(state.viewHistory) ? state.viewHistory.slice(-VIEW_HISTORY_LIMIT) : [];
@@ -184,6 +188,7 @@ function cleanThreads(threads) {
                 contacts: contactsClean,
                 threads: state.threads,
                 callLog: state.callLog,
+                voicemails: Array.isArray(state.voicemails) ? state.voicemails.slice(-20) : [],
                 settings: state.settings,
                 view: state.view,
                 viewHistory: Array.isArray(state.viewHistory) ? state.viewHistory.slice(-VIEW_HISTORY_LIMIT) : [],
@@ -217,6 +222,8 @@ function cleanThreads(threads) {
                 : [];
             state.threads = cleanThreads(meta.threads);
             state.callLog = Array.isArray(meta.callLog) ? meta.callLog : [];
+            state.voicemails = Array.isArray(meta.voicemails) ? meta.voicemails : [];
+            state.dialTab = meta.dialTab || 'keypad';
             state.settings = { ...DEFAULT_SETTINGS, ...(meta.settings && typeof meta.settings === 'object' ? meta.settings : {}) };
             const savedView = meta.view;
             if (savedView && VALID_VIEWS.has(savedView)) state.view = savedView;
@@ -1035,37 +1042,57 @@ function cleanThreads(threads) {
                 background:#0a84ff; flex-shrink:0;
                 align-self:center; margin-left:4px;
             }
-            #phonesocial-panel .ps-contact-item {
-                display:flex; align-items:center; justify-content:space-between;
+            /* ─── iOS Contacts ─── */
+            #phonesocial-panel .ps-contacts-wrap { overflow-y:auto; }
+            #phonesocial-panel .ps-contacts-search {
+                display:flex; align-items:center; gap:6px;
+                background:#e5e5ea; border-radius:10px;
+                padding:8px 12px; margin:8px 12px 12px;
             }
-            #phonesocial-panel .ps-contact-info {
-                flex:1; min-width:0;
+            #phonesocial-panel .ps-empty-state {
+                text-align:center; padding:40px 20px; color:#8e8e93;
             }
-            #phonesocial-panel .ps-contact-delete {
-                width:44px; height:44px; border-radius:50%;
-                border:none; background:rgba(255,59,48,0.12);
-                color:#ff3b30; font-size:18px; font-weight:700;
-                cursor:pointer; flex-shrink:0;
-                display:flex; align-items:center; justify-content:center;
-                margin-left:8px;
+            #phonesocial-panel .ps-empty-icon { font-size:48px; margin-bottom:12px; }
+            #phonesocial-panel .ps-empty-state p { font-size:18px; font-weight:600; color:#1c1c1e; margin:0 0 6px; }
+            #phonesocial-panel .ps-empty-state span { font-size:13px; display:block; margin-bottom:16px; line-height:1.4; }
+            #phonesocial-panel .ps-add-btn {
+                background:#007aff; color:#fff; border:none;
+                border-radius:20px; padding:10px 24px; font-size:14px;
+                font-weight:500; cursor:pointer;
                 -webkit-tap-highlight-color:transparent;
             }
-            #phonesocial-panel .ps-contact-delete:active {
-                background:#ff3b30; color:#fff;
+            #phonesocial-panel .ps-add-btn:active { opacity:0.7; }
+            #phonesocial-panel .ps-contact-section { margin-bottom:4px; }
+            #phonesocial-panel .ps-contact-section-header {
+                font-size:12px; font-weight:600; color:#8e8e93;
+                text-transform:uppercase; letter-spacing:0.5px;
+                padding:4px 16px; margin-top:4px;
+                background:#f2f2f7; position:sticky; top:0; z-index:1;
             }
-            #phonesocial-panel .ps-contact-actions {
-                display:flex; align-items:center; gap:4px; flex-shrink:0; margin-left:8px;
+            #phonesocial-panel .ps-contact-row {
+                display:flex; align-items:center; gap:10px;
+                padding:10px 16px; cursor:pointer;
+                -webkit-tap-highlight-color:transparent;
             }
-            #phonesocial-panel .ps-contact-btn {
-                width:38px; height:38px; border-radius:50%;
-                border:none; background:rgba(0,122,255,0.1);
+            #phonesocial-panel .ps-contact-row:active { background:rgba(0,0,0,0.04); }
+            #phonesocial-panel .ps-contact-row-info {
+                flex:1; min-width:0; display:flex; flex-direction:column;
+            }
+            #phonesocial-panel .ps-contact-row-name {
+                font-size:15px; font-weight:500; color:#3a3a3c;
+            }
+            #phonesocial-panel .ps-contact-row-num {
+                font-size:12px; color:#8e8e93; margin-top:1px;
+            }
+            #phonesocial-panel .ps-contact-call-btn {
+                width:36px; height:36px; border-radius:50%;
+                border:none; background:rgba(0,122,255,0.08);
                 color:#007aff; font-size:16px; cursor:pointer;
                 display:flex; align-items:center; justify-content:center;
+                flex-shrink:0;
                 -webkit-tap-highlight-color:transparent;
             }
-            #phonesocial-panel .ps-contact-btn:active {
-                background:#007aff; color:#fff;
-            }
+            #phonesocial-panel .ps-contact-call-btn:active { background:#007aff; color:#fff; }
             #phonesocial-panel .ps-empty {
                 text-align:center; color:#8e8e93; padding:40px 20px;
                 font-size:13px;
@@ -1333,55 +1360,136 @@ function cleanThreads(threads) {
             /* ─── Read Receipts ─── */
             #phonesocial-panel .ps-receipt {
                 font-size:10px; color:#8e8e93;
-                text-align:right; margin-right:4px; margin-bottom:6px;
+                align-self:flex-end; margin-right:8px; margin-bottom:6px;
             }
             /* ─── Date Dividers ─── */
             #phonesocial-panel .ps-date-divider {
                 text-align:center; font-size:11px; color:#8e8e93;
                 padding:8px 0; font-weight:500;
             }
-            /* ─── Dial Pad ─── */
-            #phonesocial-panel .ps-dial { text-align:center; padding:8px 0; }
+            /* ─── iOS Dial Pad ─── */
+            #phonesocial-panel .ps-dial {
+                text-align:center; padding:8px 0;
+                display:flex; flex-direction:column; height:100%;
+            }
             #phonesocial-panel .ps-dial-display {
-                font-size:28px; font-weight:300; color:#1c1c1e;
-                margin:12px 0 16px; min-height:36px;
-                letter-spacing:1px;
+                font-size:32px; font-weight:300; color:#1c1c1e;
+                margin:20px 0 24px; min-height:40px;
+                letter-spacing:1px; font-variant-numeric:tabular-nums;
+            }
+            #phonesocial-panel .ps-dial-placeholder {
+                color:#c7c7cc; font-size:18px; font-weight:400;
             }
             #phonesocial-panel .ps-dial-pad {
-                display:grid; grid-template-columns:repeat(3,64px);
-                gap:10px; justify-content:center;
+                display:grid; grid-template-columns:repeat(3,72px);
+                gap:12px; justify-content:center; flex:1;
+                align-content:center; padding-bottom:20px;
             }
             #phonesocial-panel .ps-dial-key {
-                width:64px; height:64px; border-radius:50%;
-                border:none; background:#e5e5ea;
+                width:72px; height:72px; border-radius:50%;
+                border:1px solid rgba(0,0,0,0.08);
+                background:#f9f9fb;
                 cursor:pointer;
                 display:flex; flex-direction:column;
                 align-items:center; justify-content:center;
                 touch-action:manipulation;
                 -webkit-tap-highlight-color:transparent;
+                transition:background 0.05s;
             }
-            #phonesocial-panel .ps-dial-key:active { background:#c7c7cc; }
-            #phonesocial-panel .ps-dial-key-num { font-size:22px; font-weight:500; color:#1c1c1e; line-height:1; }
-            #phonesocial-panel .ps-dial-key-sub { font-size:8px; font-weight:600; color:#8e8e93; letter-spacing:1px; line-height:1; }
+            #phonesocial-panel .ps-dial-key:active { background:#e0e0e5; }
+            #phonesocial-panel .ps-dial-key-num {
+                font-size:26px; font-weight:400; color:#1c1c1e;
+                line-height:1; margin-bottom:2px;
+            }
+            #phonesocial-panel .ps-dial-key-sub {
+                font-size:9px; font-weight:600; color:#8e8e93;
+                letter-spacing:1.5px; line-height:1;
+            }
             #phonesocial-panel .ps-dial-actions {
-                display:flex; justify-content:center; gap:16px;
-                padding:14px 0 8px;
+                display:flex; justify-content:center; align-items:center;
+                gap:20px; padding:16px 0 12px;
             }
-            #phonesocial-panel .ps-call {
-                background:#34c759; color:#fff; border:none;
-                border-radius:50%; width:56px; height:56px;
-                font-size:18px; cursor:pointer;
-                box-shadow:0 2px 8px rgba(52,199,89,0.3);
+            #phonesocial-panel .ps-dial-action-btn {
+                width:64px; height:64px; border-radius:50%;
+                border:none; background:#e5e5ea;
+                color:#1c1c1e; font-size:22px; cursor:pointer;
                 display:flex; align-items:center; justify-content:center;
+                -webkit-tap-highlight-color:transparent;
             }
-            #phonesocial-panel .ps-call:active { opacity:0.8; }
-            #phonesocial-panel [data-act="dial-clear"] {
-                background:#e5e5ea; color:#1c1c1e; border:none;
-                border-radius:50%; width:56px; height:56px;
-                font-size:20px; cursor:pointer;
+            #phonesocial-panel .ps-dial-action-btn:active { background:#c7c7cc; }
+            #phonesocial-panel .ps-dial-call-btn {
+                width:64px; height:64px; border-radius:50%;
+                border:none; background:#34c759;
+                cursor:pointer;
                 display:flex; align-items:center; justify-content:center;
+                box-shadow:0 4px 16px rgba(52,199,89,0.35);
+                -webkit-tap-highlight-color:transparent;
+                transition:transform 0.1s;
             }
-            #phonesocial-panel [data-act="dial-clear"]:active { background:#c7c7cc; }
+            #phonesocial-panel .ps-dial-call-btn:active {
+                transform:scale(0.92); background:#30b350;
+            }
+            /* ─── Dial Tabs ─── */
+            #phonesocial-panel .ps-dial-tabs {
+                display:flex; gap:0; border-bottom:1px solid #e5e5ea;
+                margin:0 0 8px;
+            }
+            #phonesocial-panel .ps-dial-tab {
+                flex:1; padding:10px 0; border:none; background:transparent;
+                font-size:14px; font-weight:500; color:#8e8e93;
+                cursor:pointer; text-align:center;
+                border-bottom:2px solid transparent;
+                -webkit-tap-highlight-color:transparent;
+            }
+            #phonesocial-panel .ps-dial-tab.active {
+                color:#007aff; border-bottom-color:#007aff;
+            }
+            /* ─── Recents List ─── */
+            #phonesocial-panel .ps-recents-list {
+                overflow-y:auto; flex:1;
+            }
+            #phonesocial-panel .ps-recent-row {
+                display:flex; align-items:center; gap:10px;
+                padding:10px 16px; cursor:pointer;
+                -webkit-tap-highlight-color:transparent;
+            }
+            #phonesocial-panel .ps-recent-row:active { background:rgba(0,0,0,0.04); }
+            #phonesocial-panel .ps-recent-unread { background:rgba(0,122,255,0.04); }
+            #phonesocial-panel .ps-recent-info {
+                flex:1; min-width:0; display:flex; flex-direction:column;
+            }
+            #phonesocial-panel .ps-recent-name {
+                font-size:15px; font-weight:500; color:#3a3a3c;
+            }
+            #phonesocial-panel .ps-recent-label {
+                font-size:12px; margin-top:1px;
+            }
+            #phonesocial-panel .ps-recent-time {
+                font-size:12px; color:#8e8e93; flex-shrink:0;
+            }
+            /* ─── Incoming SMS Banner ─── */
+            #phonesocial-panel .ps-incoming-banner {
+                display:flex; align-items:center; gap:10px;
+                padding:10px 14px; margin:0 0 4px;
+                background:rgba(0,122,255,0.08); border-radius:10px;
+                cursor:pointer;
+                -webkit-tap-highlight-color:transparent;
+                animation:ps-banner-in 0.3s ease-out;
+            }
+            @keyframes ps-banner-in {
+                from { opacity:0; transform:translateY(-10px); }
+                to { opacity:1; transform:translateY(0); }
+            }
+            #phonesocial-panel .ps-incoming-banner:active { background:rgba(0,122,255,0.15); }
+            #phonesocial-panel .ps-incoming-banner-text {
+                flex:1; min-width:0; display:flex; flex-direction:column;
+            }
+            #phonesocial-panel .ps-incoming-banner-text b {
+                font-size:13px; color:#3a3a3c;
+            }
+            #phonesocial-panel .ps-incoming-banner-text span {
+                font-size:12px; color:#8e8e93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+            }
             /* ─── Albums / Wallpaper Picker ─── */
             #phonesocial-panel .ps-albums { padding:4px 0; }
             #phonesocial-panel .ps-albums-header {
@@ -1436,6 +1544,34 @@ function cleanThreads(threads) {
             }
         `;
         document.head.appendChild(style);
+    }
+
+    // Injects incoming SMS banner directly into DOM without full re-render
+    function showIncomingBanner(contact, text) {
+        if (!contact) return;
+        state.incomingBanner = { contactId: contact.id, name: contact.name, text, ts: Date.now() };
+        const panel = document.getElementById('phonesocial-panel');
+        if (!panel || panel.style.display === 'none') return;
+        // Remove existing banner if present
+        const old = panel.querySelector('.ps-incoming-banner');
+        if (old) old.remove();
+        // Build and inject before .ps-body
+        const body = panel.querySelector('.ps-body');
+        if (!body) { render(); return; }
+        const banner = document.createElement('div');
+        banner.className = 'ps-incoming-banner';
+        banner.setAttribute('data-act', 'open-thread');
+        banner.setAttribute('data-id', contact.id);
+        banner.innerHTML = '<div class="ps-avatar-sm" style="background:' + avatarGradient(contact.name || '') + '">' + avatarInitial(contact.name || '?') + '</div>'
+            + '<div class="ps-incoming-banner-text"><b>' + escape(contact.name || 'Unknown') + '</b>'
+            + '<span>' + escape((text || '').slice(0, 80)) + '</span></div>';
+        body.parentNode.insertBefore(banner, body);
+        // Auto-dismiss after 5s
+        setTimeout(() => {
+            const b = panel.querySelector('.ps-incoming-banner');
+            if (b) b.remove();
+            state.incomingBanner = null;
+        }, 5000);
     }
 
     function togglePanel() {
@@ -1545,6 +1681,9 @@ function cleanThreads(threads) {
             case 'chirp-thread': body = viewChirpThread(); break;
             default:         body = viewHome();
         }
+        // Preserve compose input across re-renders (prevents typing wipe)
+        const savedInput = document.getElementById('ps-input');
+        const savedValue = savedInput ? savedInput.value : '';
         panel.innerHTML = `
             <div class="ps-phone-frame">
                 <div class="ps-statusbar">
@@ -1569,6 +1708,14 @@ function cleanThreads(threads) {
                     <span class="ps-header-title">${getHeaderTitle()}</span>
                     <button class="ps-close" id="ps-close-btn" type="button">✕</button>
                 </div>
+                ${state.incomingBanner ? `
+                <div class="ps-incoming-banner" data-act="open-thread" data-id="${state.incomingBanner.contactId}">
+                    <div class="ps-avatar-sm" style="background:${avatarGradient(state.incomingBanner.name || '')}">${avatarInitial(state.incomingBanner.name || '?')}</div>
+                    <div class="ps-incoming-banner-text">
+                        <b>${escape(state.incomingBanner.name || 'Unknown')}</b>
+                        <span>${escape((state.incomingBanner.text || '').slice(0, 80))}</span>
+                    </div>
+                </div>` : ''}
                 <div class="ps-body">${body}</div>
                 <div class="ps-nav" style="${state.view === 'call' ? 'display:none' : ''}">
                     <button data-act="nav" data-view="dial" class="${state.view === 'dial' ? 'ps-nav-active' : ''}">📞</button>
@@ -1580,6 +1727,12 @@ function cleanThreads(threads) {
             </div>
         `;
         bindPanel(panel);
+
+        // Restore compose input value after rebuild
+        if (savedValue) {
+            const input = panel.querySelector('#ps-input');
+            if (input) { input.value = savedValue; input.focus(); }
+        }
 
         // Wire up close button once per render using the shared doClose handler
         const closeBtn = panel.querySelector('#ps-close-btn');
@@ -2111,32 +2264,48 @@ CRITICAL RULES:
 
     function viewContacts() {
         if (!state.contacts.length) {
-            return `<p class="ps-empty">No contacts yet. Tap "Add Contact" to add NPCs manually, or use &lt;npc:Name&gt; in your messages.</p>
-                <div style="text-align:center;padding:8px">
-                    <button data-act="add-contact" style="background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px 20px;font-size:13px;cursor:pointer">➕ Add Contact</button>
-                </div>`;
+            return `<div class="ps-empty-state">
+                <div class="ps-empty-icon">👥</div>
+                <p>No Contacts</p>
+                <span>NPCs appear here automatically when they speak in chat, or tap + to add one manually.</span>
+                <button data-act="add-contact" class="ps-add-btn">+ Add Contact</button>
+            </div>`;
         }
-        return `
-            <ul class="ps-list">
-                ${state.contacts.map(c => `
-                    <li data-act="open-thread" data-id="${c.id}" class="ps-contact-item">
-                        <div class="ps-contact-info">
-                            <b>${escape(c.name)}</b>
-                            <span>${escape(c.number)}</span>
-                            <small>${c.source}</small>
+        // Sort alphabetically and group by first letter
+        const sorted = [...state.contacts].sort((a, b) => a.name.localeCompare(b.name));
+        const groups = {};
+        for (const c of sorted) {
+            const letter = c.name[0].toUpperCase();
+            if (!groups[letter]) groups[letter] = [];
+            groups[letter].push(c);
+        }
+        const sections = Object.entries(groups).map(([letter, contacts]) => `
+            <div class="ps-contact-section">
+                <div class="ps-contact-section-header">${letter}</div>
+                ${contacts.map(c => `
+                    <div class="ps-contact-row" data-act="open-thread" data-id="${c.id}">
+                        <div class="ps-avatar-sm" style="background:${avatarGradient(c.name)}">${avatarInitial(c.name)}</div>
+                        <div class="ps-contact-row-info">
+                            <span class="ps-contact-row-name">${escape(c.name)}</span>
+                            ${c.number ? `<span class="ps-contact-row-num">${escape(c.number)}</span>` : ''}
                         </div>
-                        <div class="ps-contact-actions">
-                            <button data-act="open-thread" data-id="${c.id}" class="ps-contact-btn" title="Text">💬</button>
-                            <button data-act="call" data-id="${c.id}" class="ps-contact-btn" title="Call">📞</button>
-                            <button data-act="delete-contact" data-id="${c.id}" class="ps-contact-delete">✕</button>
-                        </div>
-                    </li>
+                        <button data-act="open-thread" data-id="${c.id}" class="ps-contact-call-btn" title="Message" style="margin-right:6px">💬</button>
+                        <button data-act="call" data-id="${c.id}" class="ps-contact-call-btn" title="Call">📞</button>
+                    </div>
                 `).join('')}
-            </ul>
-            <div style="text-align:center;padding:8px">
-                <button data-act="add-contact" style="background:#007aff;color:#fff;border:none;border-radius:10px;padding:10px 20px;font-size:13px;cursor:pointer">➕ Add Contact</button>
             </div>
-        `;
+        `).join('');
+
+        return `<div class="ps-contacts-wrap">
+            <div class="ps-contacts-search">
+                <span>🔍</span>
+                <span style="color:#8e8e93;font-size:15px">Search</span>
+            </div>
+            ${sections}
+            <div style="padding:12px;text-align:center">
+                <button data-act="add-contact" class="ps-add-btn">+ Add Contact</button>
+            </div>
+        </div>`;
     }
 
     function avatarGradient(name) {
@@ -2313,22 +2482,102 @@ CRITICAL RULES:
         `;
     }
 
+function viewRecents() {
+        // Filter for meaningful call log entries
+        const entries = (state.callLog || []).filter(e =>
+            e.dir === 'in' || e.dir === 'out' || e.dir === 'missed' || e.dir === 'declined'
+        ).slice(-30).reverse();
+
+        // Merge voicemails into the list
+        const vmEntries = (state.voicemails || []).map(vm => ({
+            ...vm,
+            isVoicemail: true,
+            ts: vm.ts,
+            dir: 'voicemail'
+        }));
+
+        const allEntries = [...vmEntries, ...entries]
+            .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+            .slice(0, 30);
+
+        if (!allEntries.length) {
+            return '<div class="ps-empty-state"><div class="ps-empty-icon">📞</div><p>No Recent Calls</p><span>Your call history will appear here.</span></div>';
+        }
+
+        const fmtTime = ts => {
+            const d = new Date(ts);
+            const now = new Date();
+            const isToday = d.toDateString() === now.toDateString();
+            if (isToday) return d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+            return d.toLocaleDateString([], { month:'short', day:'numeric' }) + ' ' + d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+        };
+
+        return '<div class="ps-recents-list">' + allEntries.map(e => {
+            const c = state.contacts.find(x => x.id === e.contactId);
+            const name = c?.name || 'Unknown';
+            let icon, label;
+            if (e.isVoicemail) {
+                icon = '🎙️'; label = 'Voicemail';
+            } else if (e.dir === 'in') {
+                icon = '↙'; label = 'Incoming';
+            } else if (e.dir === 'out') {
+                icon = '↗'; label = 'Outgoing';
+            } else {
+                icon = '✗'; label = 'Missed';
+            }
+            const missed = e.dir === 'missed' || e.dir === 'declined';
+            const unreadVm = e.isVoicemail && !e.heard;
+
+            return `<div class="ps-recent-row${unreadVm ? ' ps-recent-unread' : ''}" data-act="${e.isVoicemail ? 'play-voicemail' : 'call'}" data-id="${e.contactId}"${e.isVoicemail ? ' data-vm-ts="' + e.ts + '"' : ''}>
+                <div class="ps-avatar-sm" style="background:${avatarGradient(name)}">${avatarInitial(name)}</div>
+                <div class="ps-recent-info">
+                    <span class="ps-recent-name">${escape(name)}${unreadVm ? ' 🔴' : ''}</span>
+                    <span class="ps-recent-label" style="color:${missed ? '#ff3b30' : '#8e8e93'}">${icon} ${label}${e.duration ? ' · ' + Math.floor(e.duration / 60) + 'm ' + (e.duration % 60) + 's' : ''}</span>
+                </div>
+                <span class="ps-recent-time">${fmtTime(e.ts)}</span>
+            </div>`;
+        }).join('') + '</div>';
+    }
+
 function viewDial() {
-        const keyMap = { '1': '', '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO', '7': 'PQRS', '8': 'TUV', '9': 'WXYZ', '*': '', '0': '+', '#': '' };
+        const tab = state.dialTab || 'keypad';
+        const vmCount = (state.voicemails || []).filter(v => !v.heard).length;
+
+        if (tab === 'recents') {
+            return `<div class="ps-dial-tabs">
+                <button data-act="dial-tab" data-tab="keypad" class="ps-dial-tab">Keypad</button>
+                <button data-act="dial-tab" data-tab="recents" class="ps-dial-tab active">Recents${vmCount ? ' 🔴' : ''}</button>
+            </div>
+            ${viewRecents()}`;
+        }
+
+        const keys = [
+            { k: '1', sub: '' },    { k: '2', sub: 'ABC' },  { k: '3', sub: 'DEF' },
+            { k: '4', sub: 'GHI' },  { k: '5', sub: 'JKL' },  { k: '6', sub: 'MNO' },
+            { k: '7', sub: 'PQRS' }, { k: '8', sub: 'TUV' },  { k: '9', sub: 'WXYZ' },
+            { k: '*', sub: '' },     { k: '0', sub: '+' },     { k: '#', sub: '' },
+        ];
+        const display = state.dialBuf || '';
         return `
+            <div class="ps-dial-tabs">
+                <button data-act="dial-tab" data-tab="keypad" class="ps-dial-tab active">Keypad</button>
+                <button data-act="dial-tab" data-tab="recents" class="ps-dial-tab">Recents${vmCount ? ' 🔴' : ''}</button>
+            </div>
             <div class="ps-dial">
-                <div class="ps-dial-display">${escape(state.dialBuf || '—')}</div>
+                <div class="ps-dial-display">${display ? escape(display) : '<span class="ps-dial-placeholder">Enter number</span>'}</div>
                 <div class="ps-dial-pad">
-                    ${'123456789*0#'.split('').map(k => `
-                        <button class="ps-dial-key" data-act="key" data-k="${k}">
-                            <span class="ps-dial-key-num">${k}</span>
-                            ${keyMap[k] ? `<span class="ps-dial-key-sub">${keyMap[k]}</span>` : ''}
+                    ${keys.map(k => `
+                        <button class="ps-dial-key" data-act="key" data-k="${k.k}">
+                            <span class="ps-dial-key-num">${k.k}</span>
+                            ${k.sub ? `<span class="ps-dial-key-sub">${k.sub}</span>` : '<span class="ps-dial-key-sub">&nbsp;</span>'}
                         </button>
                     `).join('')}
                 </div>
                 <div class="ps-dial-actions">
-                    <button data-act="dial-clear">⌫</button>
-                    <button data-act="dial-call" class="ps-call">📞</button>
+                    <button data-act="dial-clear" class="ps-dial-action-btn" title="Delete">⌫</button>
+                    <button data-act="dial-call" class="ps-dial-call-btn">
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24 11.36 11.36 0 003.58.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11.36 11.36 0 00.57 3.58 1 1 0 01-.25 1.01l-2.2 2.2z"/></svg>
+                    </button>
                 </div>
             </div>
         `;
@@ -2654,6 +2903,15 @@ case 'open-thread':
                         state.view = 'home';
                         render();
                         phoneNotify('incoming-call', `📞 ${callContact.name}`, `${callContact.name} never answered (in combat)`);
+                        // Voicemail for unanswered outgoing call
+                        setTimeout(() => {
+                            generateSMSReply(id).then(vmText => {
+                                const text = vmText || 'Sorry I missed your call.';
+                                state.voicemails = state.voicemails || [];
+                                state.voicemails.push({ contactId: id, text, ts: Date.now(), heard: false });
+                                saveMeta();
+                            }).catch(() => {});
+                        }, 3000);
                         phoneTtsSpeak(`${callContact.name} never answered`, callContact.name);
                     }, 15000);
                     return;
@@ -2697,13 +2955,24 @@ case 'open-thread':
                     clearTimeout(state.activeCall._autoDeclineTimer);
                 }
                 const decContact = state.contacts.find(c => c.id === state.activeCall.contactId);
-                state.callLog.push({ contactId: state.activeCall.contactId, dir: 'declined', ts: Date.now(), duration: 0 });
+                const decId = state.activeCall.contactId;
+                state.callLog.push({ contactId: decId, dir: 'declined', ts: Date.now(), duration: 0 });
                 state.activeCall = null;
                 saveMeta();
                 state.view = 'home';
                 render();
                 if (decContact) {
                     phoneTtsSpeak(`Call declined`, decContact.name);
+                    // Generate voicemail after declined call
+                    setTimeout(() => {
+                        generateSMSReply(decId).then(vmText => {
+                            const text = vmText || 'Hey, it\'s me. Call me back when you can.';
+                            state.voicemails = state.voicemails || [];
+                            state.voicemails.push({ contactId: decId, text, ts: Date.now(), heard: false });
+                            saveMeta();
+                            phoneNotify('incoming-sms', `📼 ${decContact.name}`, `Voicemail from ${decContact.name}`);
+                        }).catch(() => {});
+                    }, 3000);
                 }
                 return;
             }
@@ -2748,9 +3017,11 @@ case 'open-thread':
                         if (!state.activeCall || state.activeCall.status !== 'connected') return;
                         generateSMSReply(state.activeCall.contactId).then(reply => {
                             if (!state.activeCall || state.activeCall.status !== 'connected') return;
-                            const response = reply || buildProactiveIcebreaker(callContact);
+                            if (!reply) return; // No reply — skip silently
+                            const response = reply;
                             state.callLog.push({ contactId: state.activeCall.contactId, dir: 'speak', ts: Date.now(), text: response, fromMe: false });
                             saveMeta();
+                            updateSmsInjection(); // Inject call into main ST context
                             render();
                             if (state.activeCall?.status === 'connected') startCallTimer();
                             phoneTtsSpeak(response, callContact?.name || '');
@@ -2763,6 +3034,22 @@ case 'open-thread':
                 state.dialBuf += el.getAttribute('data-k');
                 render();
                 return;
+            case 'dial-tab':
+                state.dialTab = el.getAttribute('data-tab') || 'keypad';
+                saveMeta();
+                render();
+                return;
+            case 'play-voicemail': {
+                const vmTs = parseInt(el.getAttribute('data-vm-ts') || '0');
+                const vm = (state.voicemails || []).find(v => v.ts === vmTs);
+                if (vm) {
+                    vm.heard = true;
+                    saveMeta();
+                    if (typeof toastr !== 'undefined') toastr.info(vm.text.slice(0, 200), '📼 Voicemail from ' + (state.contacts.find(c => c.id === vm.contactId)?.name || 'Unknown'), { timeOut: 8000 });
+                    else alert('Voicemail: ' + vm.text);
+                }
+                return;
+            }
             case 'dial-clear':
                 state.dialBuf = state.dialBuf.slice(0, -1);
                 render();
@@ -3050,10 +3337,6 @@ case 'open-thread':
         }
     }
 
-    function randomFallbackReply() {
-        const replies = ['k', 'lol', 'oh?', 'tell me more', 'hmm', 'sure', 'wyd', 'omw'];
-        return replies[Math.floor(Math.random() * replies.length)];
-    }
 
     // ─── TTS via ST's built-in TTS system ───────────────────────────
     function isTtsAvailable() {
@@ -3135,6 +3418,27 @@ case 'open-thread':
         return candidates;
     }
 
+    // Strip RP narration markers from main chat messages used as SMS context.
+    // Removes *asterisk actions*, [stage directions], and trims to keep it terse.
+    function stripNarration(text) {
+        if (!text) return '';
+        return text
+            .replace(/\*[^*]+\*/g, '')       // *narration*
+            .replace(/\[[^\]]+\]/g, '')       // [stage directions]
+            .replace(/\([^)]*action[^)]*\)/gi, '') // (action cues)
+            .replace(/\s{2,}/g, ' ')          // collapse whitespace
+            .trim();
+    }
+
+    // Strip NPC name prefix from AI replies (e.g. "Prof. Beom-seok: Hey" → "Hey")
+    function stripNamePrefix(text, contactName) {
+        if (!text || !contactName) return text;
+        const escaped = contactName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Match "Name: ", "**Name:** ", "Name - ", "Name—", "Name says:" etc.
+        const re = new RegExp('^\\*{0,2}' + escaped + '\\*{0,2}\\s*[:\\-—]\\s*|^' + escaped + '\\s+(?:says?|texts?|writes?)[,:]\\s*', 'i');
+        return text.replace(re, '').trim();
+    }
+
     // Extract reply text from various API response formats
     function extractApiReply(data) {
         if (!data) return null;
@@ -3193,8 +3497,10 @@ case 'open-thread':
                     .slice(-5)
                     .map(msg => {
                         const speaker = msg.name || (msg.is_user ? (ctx.name1 || 'You') : (ctx.name2 || ctx.name || 'Character'));
-                        return `${speaker}: ${msg.mes || msg.text || ''}`;
-                    });
+                        const cleanText = stripNarration(msg.mes || msg.text || '').slice(0, 100);
+                        return cleanText ? `${speaker}: ${cleanText}` : null;
+                    })
+                    .filter(Boolean);
                 if (relevantMsgs.length) {
                     mainChatContext = `\n\nRecent events involving ${contact.name}:\n${relevantMsgs.join('\n')}`;
                 }
@@ -3220,8 +3526,9 @@ case 'open-thread':
         const s = window.PhoneSocialSettings || {};
         const apiKey = s.apiKey?.trim();
         if (apiKey) {
+            console.log(`[PhoneSocial] 🔑 using custom API: ${s.apiUrl} | model: ${s.model || 'gpt-4o-mini'} | contact: ${contact.name}`);
             // Build API URL candidates (UIE-style: tries /chat/completions, /v1/chat/completions, etc.)
-            const rawUrl = ((s.apiUrl && s.apiUrl !== 'undefined' && s.apiUrl !== 'null') ? s.apiUrl : 'https://api.openai.com/v1').replace(/\/+$/, '');
+            const rawUrl = ((s.apiUrl && s.apiUrl !== 'undefined' && s.apiUrl !== 'null') ? s.apiUrl : 'https://api.openai.com/v1').trim().replace(/[\r\n\s]+/g, '').replace(/\/+$/, '');
             const model = s.model || 'gpt-4o-mini';
             const promptTemplate = s.systemPromptTemplate || 'You are {char}, responding via text message. Keep replies short and in character.';
             const charName = contact.name;
@@ -3230,8 +3537,8 @@ case 'open-thread':
                 (otherContacts ? `\n\nOther contacts you know:\n${otherContacts}` : '') +
                 (npcMemories ? npcMemories : '') +
                 (mainChatContext ? mainChatContext : '') +
-                `\n\nYou are currently texting ${myName} (also called you).`;
-            const userMsg = `SMS conversation with ${myName}:\n${conversation || '(no messages yet)'}\n\nWrite a short, in-character SMS reply from ${charName} to ${myName} (the person you're texting). Keep it casual, natural, and concise — like a real text message. Reply as ${charName}, not as ${myName}.`;
+                `\n\nYou are currently texting ${myName} (also called you).\nCRITICAL: Send ONLY the SMS text. No narration, stage directions, asterisks, or commentary about the scene.`;
+            const userMsg = `SMS conversation with ${myName}:\n${conversation || '(no messages yet)'}\n\nWrite ONLY the SMS reply from ${charName} to ${myName}. Just the text message — casual, natural, concise. No narration.`;
 
             // Build URL candidates from raw input
             const urlCandidates = buildApiUrlCandidates(rawUrl);
@@ -3252,7 +3559,7 @@ case 'open-thread':
                     const body = { model, messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userMsg },
-                    ], max_tokens: 150, temperature: 0.8 };
+                    ], max_tokens: 300, temperature: 0.8 };
                     const res = await fetch(url, {
                         method: 'POST', headers, body: JSON.stringify(body),
                     });
@@ -3265,44 +3572,84 @@ case 'open-thread':
                     if (!data) continue;
                     // Extract text from various response formats (chat, text, Anthropic, Gemini)
                     const text = extractApiReply(data);
-                    if (text) return text;
+                    if (text) return stripNamePrefix(text, contact.name);
                 } catch (e) {
                     console.warn(`[PhoneSocial] fetch failed for ${url}:`, e?.message || e);
                     continue;
                 }
             }
-            console.warn('[PhoneSocial] all API endpoints failed — check your model name matches the provider (e.g., DeepSeek needs "deepseek-chat", not "gpt-4o-mini")');
-            return null;
+            console.warn('[PhoneSocial] all API endpoints failed — falling back to ST generateQuietPrompt');
+            // Fall through to generateQuietPrompt below instead of returning null
         }
 
-        // Fallback: use ST's own generateQuietPrompt
-        if (ctx?.generateQuietPrompt) {
-            const prompt = [
-                `[System: You are ${contact.name} texting ${myName}.]`,
-                npcDescription ? `[${contact.name}'s character: ${npcDescription}]\n` : '',
-                otherContacts ? `[Other contacts you know:]\n${otherContacts}\n` : '',
-                npcMemories ? `[What ${contact.name} knows/remembers:]\n${npcMemories.replace(/^\\n\\n/, '')}\n` : '',
-                mainChatContext ? `[Recent main chat events involving ${contact.name}:]\n${mainChatContext.replace(/^\\n\\n/, '')}\n` : '',
-                `[SMS conversation with ${myName}:]\n${conversation}`,
-                `\n[Write a short, in-character SMS reply from ${contact.name} to ${myName}. Keep it casual, natural, and under 2 sentences — like a real text message. Reply as ${contact.name}, not as ${myName}.]`,
+        // Fallback: proxy through ST's local server (which can reach DeepSeek server-side)
+        // generateQuietPrompt returns undefined due to ST tool-calling pipeline interception,
+        // so we call ST's local chat-completions endpoint directly.
+        console.log('[PhoneSocial] falling back to ST local proxy for ' + contact.name);
+        try {
+            const stOrigin = window.location.origin || 'http://localhost:8000';
+            // Build concise chat messages
+            const charDesc = npcDescription ? npcDescription.slice(0, 300) : '';
+            const memSnippet = npcMemories ? npcMemories.replace(/^\\n\\n/, '').slice(0, 300) : '';
+            const chatSnippet = mainChatContext ? mainChatContext.replace(/^\\n\\n/, '').slice(0, 400) : '';
+            const convoSnippet = conversation.slice(-500);
+
+            const systemMsg = [
+                'You are ' + contact.name + '.',
+                charDesc ? charDesc : '',
+                'You are texting ' + myName + ' via SMS on your phone.',
+                'CRITICAL: Reply with ONLY the SMS text. No narration, no stage directions, no asterisks, no commentary about the scene. Just what you would type on a phone.',
+            ].filter(Boolean).join(' ');
+
+            const userMsg = [
+                memSnippet ? 'You remember: ' + memSnippet : '',
+                chatSnippet ? 'Recent events: ' + chatSnippet : '',
+                'SMS conversation with ' + myName + ':',
+                convoSnippet || '(no messages yet)',
+                '',
+                'Your reply:',
             ].filter(Boolean).join('\n');
-            try {
-                const reply = await ctx.generateQuietPrompt({
-                    quietPrompt: prompt,
-                    quietToLoud: false,
-                    skipWIAN: true,
-                    responseLength: 200,
-                    trimToSentence: true,
-                });
-                if (reply && typeof reply === 'string') {
-                    return reply.trim().replace(/^["']|["']$/g, '');
+
+            const body = JSON.stringify({
+                messages: [
+                    { role: 'system', content: systemMsg },
+                    { role: 'user', content: userMsg }
+                ],
+                max_tokens: 300,
+                temperature: 0.8,
+                stream: false
+            });
+
+            // Try ST's chat-completions proxy endpoint
+            const urls = [
+                stOrigin + '/api/backends/chat-completions',
+                stOrigin + '/api/generate',
+            ];
+            for (const url of urls) {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body
+                    });
+                    if (!res.ok) { console.warn('[PhoneSocial] ST proxy ' + res.status + ' at ' + url); continue; }
+                    const data = await res.json().catch(() => null);
+                    const text = extractApiReply(data);
+                    if (text) {
+                        console.log('[PhoneSocial] ST proxy reply: ' + text.slice(0, 60));
+                        return stripNamePrefix(text, contact.name);
+                    }
+                } catch (e) {
+                    console.warn('[PhoneSocial] ST proxy fetch failed for ' + url + ': ' + (e?.message || e));
                 }
-            } catch (e) {
-                console.warn('[PhoneSocial] generateQuietPrompt failed:', e);
             }
+            console.warn('[PhoneSocial] ST proxy all endpoints failed — falling to hardcoded');
+        } catch (e) {
+            console.warn('[PhoneSocial] ST proxy error:', e);
         }
         return null;
     }
+
 
     async function simulateReply(contactId) {
         if (!state.settings.autoReplies) return;
@@ -3311,8 +3658,12 @@ case 'open-thread':
         // Show typing indicator while we generate
         state.typingContactId = contactId;
         if (state.view === 'thread' && state.activeContact === contactId) render();
-        // Try ST-powered LLM generation first, fall back to hardcoded replies
-        const text = await generateSMSReply(contactId) || randomFallbackReply();
+        // Try ST-powered LLM generation — if it fails, skip the reply entirely
+        const text = await generateSMSReply(contactId);
+        if (!text) {
+            state.typingContactId = null;
+            return;
+        }
         // Clear typing indicator
         state.typingContactId = null;
         // Personality-based reply delay
@@ -3326,6 +3677,7 @@ case 'open-thread':
             // Toastr notification for incoming SMS
             if (contact) {
                 phoneNotify('incoming-sms', `📩 ${contact.name}`, `${contact.name}: ${text.slice(0, 120)}`);
+                showIncomingBanner(contact, text);
             }
             // Trigger memory extraction after a brief delay (let the user see the reply first)
             setTimeout(() => {
@@ -3475,76 +3827,6 @@ case 'open-thread':
         return activity ? activity.label : null;
     }
 
-    // ─── Contextual icebreaker for proactive texts ─────────────────
-    // When generateSMSReply() fails (no API key, no character card, empty thread),
-    // build a natural first message using whatever context is available — main chat
-    // events, NPC memories, or at minimum the NPC's name. NEVER falls back to "lol"/"k".
-    function buildProactiveIcebreaker(contact) {
-        const ctx = getCtx();
-        const myName = ctx?.name2 || ctx?.name || 'someone';
-        const contactName = contact.name;
-
-        // Gather main chat events involving this NPC
-        const events = [];
-        try {
-            if (ctx?.chat) {
-                const nameLower = contactName.toLowerCase();
-                const msgs = ctx.chat
-                    .filter(m => m && !m.is_system)
-                    .filter(m => {
-                        const speaker = (m.name || '').toLowerCase();
-                        const text = (m.mes || m.text || '').toLowerCase();
-                        return speaker === nameLower || text.includes(nameLower);
-                    })
-                    .slice(-3);
-                for (const m of msgs) {
-                    const who = m.name || (m.is_user ? (ctx.name1 || 'You') : myName);
-                    const said = (m.mes || m.text || '').trim().slice(0, 100);
-                    if (said) events.push(`${who}: ${said}`);
-                }
-            }
-        } catch (_) {}
-
-        // Gather NPC memories
-        const mems = (Array.isArray(contact.memories) ? contact.memories : [])
-            .slice(-3)
-            .map(m => m.text)
-            .filter(Boolean);
-
-        // Build the icebreaker
-        if (events.length > 0) {
-            // Has main chat context — reference it naturally
-            const lastEvent = events[events.length - 1];
-            const openers = [
-                `Hey, about earlier — ${lastEvent.split(': ').slice(1).join(': ').slice(0, 60)}... what's up?`,
-                `Following up on what we talked about. Got a minute?`,
-                `So I've been thinking about our conversation. Can we chat?`,
-                `Hey! Just wanted to check in after earlier.`,
-            ];
-            return openers[Math.floor(Math.random() * openers.length)];
-        }
-
-        if (mems.length > 0) {
-            // Has memories but no live chat context
-            const mem = mems[0];
-            const openers = [
-                `Hey, I remember ${mem.slice(0, 60)}... can we talk?`,
-                `About ${mem.slice(0, 50)} — want to catch up?`,
-                `I was thinking about ${mem.slice(0, 50)}. What are you up to?`,
-            ];
-            return openers[Math.floor(Math.random() * openers.length)];
-        }
-
-        // Minimal context — polite, natural opener using their name
-        const openers = [
-            `Hey, this is ${contactName}. Got your number — how's it going?`,
-            `Hi! It's ${contactName}. Hope you don't mind me reaching out.`,
-            `Hey there, ${contactName} here. What are you up to?`,
-            `Yo, it's ${contactName}. Just got your contact — what's good?`,
-        ];
-        return openers[Math.floor(Math.random() * openers.length)];
-    }
-
     async function simulateIncomingCall(contact) {
         if (state.activeCall) return; // Already on a call
         const personality = inferPersonality(contact);
@@ -3571,15 +3853,33 @@ case 'open-thread':
             render();
             phoneNotify('incoming-call', `📞 ${contact.name}`, `📞 Missed call from ${contact.name}`);
             phoneTtsSpeak(`Missed call from ${contact.name}`, contact.name);
+            // Generate voicemail after missed call
+            setTimeout(() => {
+                const c = state.contacts.find(x => x.id === contact.id);
+                if (!c) return;
+                generateSMSReply(contact.id).then(vmText => {
+                    const text = vmText || 'Hey, it\'s me. Call me back when you can.';
+                    state.voicemails = state.voicemails || [];
+                    state.voicemails.push({ contactId: contact.id, text, ts: Date.now(), heard: false });
+                    saveMeta();
+                    phoneNotify('incoming-sms', `📼 ${contact.name}`, `Voicemail from ${contact.name}`);
+                }).catch(() => {});
+            }, 3000);
         }, 15000);
         state.activeCall._autoDeclineTimer = autoDeclineTimer;
     }
 
-    async function simulateProactiveText(contact) {
+    async function simulateProactiveText(contact, trigger) {
         if (!state.settings.autoReplies) return;
         if (!state.threads[contact.id]) state.threads[contact.id] = [];
         const personality = inferPersonality(contact);
-        const text = await generateSMSReply(contact.id) || buildProactiveIcebreaker(contact);
+        // AI generation only — if it fails, skip (no scripted fallbacks)
+        const aiReply = await generateSMSReply(contact.id);
+        if (!aiReply) {
+            console.log('[PhoneSocial] proactive: no AI reply for', contact.name, '— skipping');
+            return;
+        }
+        const text = aiReply;
         setTimeout(() => {
             if (!state.threads[contact.id]) return;
             state.threads[contact.id].push({ from: 'them', text, ts: Date.now() });
@@ -3588,8 +3888,131 @@ case 'open-thread':
             if (state.view === 'thread' && state.activeContact === contact.id) render();
             if (contact) {
                 phoneNotify('incoming-sms', `📩 ${contact.name}`, `${contact.name}: ${text.slice(0, 120)}`);
+                showIncomingBanner(contact, text);
             }
         }, getResponseDelay(contact, personality));
+    }
+
+    // ─── Story-aware proactive helpers ──────────────────────────────
+    // Checks whether an NPC is currently "present" in the main chat —
+    // if they've spoken in the last few messages, they're in the scene.
+    function isNpcPresent(contactName) {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat) return false;
+            const nameLower = contactName.toLowerCase();
+            const recent = ctx.chat.slice(-6).filter(m => m && !m.is_system);
+            for (const m of recent) {
+                const speaker = (m.name || '').toLowerCase();
+                if (speaker === nameLower) return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    // Scans recent main chat for story beats that warrant a proactive message.
+    // Returns {type, intensity} or null if nothing significant happened.
+    // STRICT RULES:
+    //  - NPC must have SPOKEN in the scene (not just mentioned) for conflict/exit
+    //  - NPC still in the last 3 messages → skip (they're right there)
+    //  - Conflict requires NPC as speaker or direct target, not just mentioned nearby
+    //  - No "mentioned" trigger — too noisy
+    function detectStoryTrigger(contactName) {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat) return null;
+            const nameLower = contactName.toLowerCase();
+            const recent = ctx.chat.slice(-25).filter(m => m && !m.is_system);
+            if (!recent.length) return null;
+
+            // ── Guard: NPC still active in scene → don't trigger ──
+            let spokenRecently = false;
+            for (let i = recent.length - 1; i >= Math.max(0, recent.length - 3); i--) {
+                if ((recent[i].name || '').toLowerCase() === nameLower) {
+                    spokenRecently = true;
+                    break;
+                }
+            }
+            if (spokenRecently) return null; // They're literally in the room
+
+            // ── Find NPC's last appearance and user's last message ──
+            let npcLastIdx = -1;
+            let userLastIdx = -1;
+            for (let i = recent.length - 1; i >= 0; i--) {
+                const speaker = (recent[i].name || '').toLowerCase();
+                if (speaker === nameLower && npcLastIdx === -1) npcLastIdx = i;
+                if (recent[i].is_user && userLastIdx === -1) userLastIdx = i;
+            }
+
+            // ── NPC never spoke in this window → they can't have "left" or "fought" ──
+            if (npcLastIdx === -1) return null;
+
+            // Need at least 5 messages since NPC's last line for any trigger
+            const msgsSinceNpc = recent.length - 1 - npcLastIdx;
+            if (msgsSinceNpc < 5) return null;
+
+            // ── SCENE EXIT: NPC left the scene ──
+            // User must have spoken 3+ times since NPC's last line,
+            // and those user messages contain exit language
+            const userMsgsSince = recent.slice(npcLastIdx + 1).filter(m => m.is_user);
+            if (userMsgsSince.length >= 3) {
+                const exitWords = ['leave', 'left', 'walk out', 'storm', 'exit', 'gone', 'away', 'home', 'later', 'bye', 'goodbye', 'night', 'headed out', 'took off'];
+                let isExit = false;
+                for (const m of userMsgsSince) {
+                    const text = (m.mes || m.text || '').toLowerCase();
+                    for (const w of exitWords) {
+                        if (text.includes(w)) { isExit = true; break; }
+                    }
+                    if (isExit) break;
+                }
+                if (isExit) return { type: 'scene_exit', intensity: 'high' };
+                // Even without exit words, if NPC has been gone for 8+ messages, treat as soft exit
+                if (msgsSinceNpc >= 8) return { type: 'scene_exit', intensity: 'medium' };
+            }
+
+            // ── CONFLICT: NPC was directly involved in an argument ──
+            // Only count if NPC is the SPEAKER of the conflict line, NOT just mentioned nearby
+            const conflictWords = ['yell', 'shout', 'slam', 'storm', 'argue', 'fight', 'furious',
+                'angry', 'upset', 'cry', 'tears', 'scream'];
+            let foundConflict = false;
+            let highIntensity = false;
+
+            for (let i = Math.max(0, npcLastIdx - 3); i <= npcLastIdx; i++) {
+                const m = recent[i];
+                const speaker = (m.name || '').toLowerCase();
+                const text = (m.mes || m.text || '').toLowerCase();
+
+                // NPC must be the SPEAKER, or the NEXT message's speaker must be NPC
+                // (someone yelled AT the NPC, then NPC responded)
+                const nextM = recent[i + 1];
+                const nextSpeaker = nextM ? (nextM.name || '').toLowerCase() : '';
+                const npcIsTarget = nextSpeaker === nameLower; // NPC responded right after this
+
+                if (speaker === nameLower || npcIsTarget) {
+                    for (const w of conflictWords) {
+                        const checkText = npcIsTarget ? text : text; // check the conflict message itself
+                        if (checkText.includes(w)) {
+                            foundConflict = true;
+                            if (w === 'storm' || w === 'furious' || w === 'scream') highIntensity = true;
+                            break;
+                        }
+                    }
+                    // Also check if NPC's OWN message contains emotional language
+                    if (!foundConflict && speaker === nameLower) {
+                        const emotional = ['sorry', 'apologize', 'regret', 'can\'t believe', 'hurt', 'upset', 'furious', 'angry'];
+                        for (const e of emotional) {
+                            if (text.includes(e)) { foundConflict = true; break; }
+                        }
+                    }
+                }
+                if (foundConflict && highIntensity) break;
+            }
+
+            if (foundConflict) {
+                return { type: 'conflict', intensity: highIntensity ? 'high' : 'medium' };
+            }
+        } catch (_) {}
+        return null;
     }
 
     let proactiveInterval = null;
@@ -3607,16 +4030,66 @@ case 'open-thread':
     function checkProactiveNPCs() {
         const contacts = state.contacts;
         if (!contacts.length || !state.settings.autoReplies) return;
+
+        // Helper: has this NPC texted the user recently? Skip if so.
+        function hasRecentInteraction(c) {
+            const thread = state.threads[c.id];
+            if (!Array.isArray(thread) || !thread.length) return false;
+            // Check last message — if NPC sent it within 10 min, skip
+            const last = thread[thread.length - 1];
+            if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 600000) return true;
+            // Also check if user sent a message in the last 2 min (NPC probably about to reply)
+            if (last.from === 'me' && (Date.now() - (last.ts || 0)) < 120000) return true;
+            return false;
+        }
+
+        // Phase 1 — scan all contacts for story triggers (always runs, ignores cooldowns)
+        const triggered = [];
+        for (const c of contacts) {
+            if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
+            if (isNpcPresent(c.name)) continue; // NPC is in the room — don't text them
+            if (hasRecentInteraction(c)) continue; // Just texted — don't harass
+            const trigger = detectStoryTrigger(c.name);
+            if (trigger) {
+                triggered.push({ contact: c, trigger });
+            }
+        }
+
+        // Phase 2 — if we have triggered NPCs, pick the highest-intensity one
+        if (triggered.length) {
+            const intensityRank = { high: 3, medium: 2, low: 1 };
+            triggered.sort((a, b) =>
+                (intensityRank[b.trigger.intensity] || 0) - (intensityRank[a.trigger.intensity] || 0)
+            );
+            const winner = triggered[0];
+            // Cooldown check for triggered — 2 min to prevent spam
+            const last = winner.contact._lastProactiveTime || 0;
+            if (Date.now() - last >= 120000) {
+                winner.contact._lastProactiveTime = Date.now();
+                const personality = inferPersonality(winner.contact);
+                const shouldCall = winner.trigger.intensity === 'high' && (personality.prefersCall || personality.initiative >= 7);
+                console.log('[PhoneSocial] story-triggered: ' + winner.contact.name + ' ' + winner.trigger.type + ' (' + winner.trigger.intensity + ') → ' + (shouldCall ? 'call' : 'text'));
+                if (shouldCall) {
+                    simulateIncomingCall(winner.contact);
+                } else {
+                    simulateProactiveText(winner.contact, winner.trigger);
+                }
+            }
+            return; // Don't also do random proactivity this cycle
+        }
+
+        // Phase 3 — random proactivity (only when no story triggers found, reduced frequency)
         const eligible = contacts.filter(c => {
             if (!c.id || c.source === 'st-character' || c.source === 'st-group') return false;
-            // Skip NPCs who are currently doing something that prevents contact
+            if (isNpcPresent(c.name)) return false; // Skip present NPCs
+            if (hasRecentInteraction(c)) return false; // Just texted — don't harass
             const activity = getCurrentActivity(c);
             if (activity && activity.noProactive) return false;
             const personality = inferPersonality(c);
-            const cooldownMs = Math.max(120000, 300000 - personality.initiative * 20000);
+            const cooldownMs = Math.max(300000, 900000 - personality.initiative * 60000); // 5-15 min
             const last = c._lastProactiveTime || 0;
             if (Date.now() - last < cooldownMs) return false;
-            return Math.random() < (personality.initiative / 20);
+            return Math.random() < (personality.initiative / 30); // Lower random rate
         });
         if (!eligible.length) return;
         eligible.sort((a, b) => inferPersonality(b).initiative - inferPersonality(a).initiative);
@@ -3625,25 +4098,25 @@ case 'open-thread':
         const personality = inferPersonality(chosen);
         const shouldCall = personality.prefersCall || (personality.initiative >= 5 && Math.random() < 0.35);
         const activityLabel = getActivityLabel(chosen);
-        console.log(`[PhoneSocial] proactive: ${chosen.name} initiates ${shouldCall ? 'call' : 'text'} (initiative=${personality.initiative}${activityLabel ? ', ' + activityLabel : ''})`);
+        console.log('[PhoneSocial] random proactive: ' + chosen.name + ' initiates ' + (shouldCall ? 'call' : 'text') + ' (initiative=' + personality.initiative + (activityLabel ? ', ' + activityLabel : '') + ')');
         if (shouldCall) {
             simulateIncomingCall(chosen);
         } else {
-            simulateProactiveText(chosen);
+            simulateProactiveText(chosen, null); // No trigger
         }
     }
 
-    // ─── SMS → Main Chat injection ───────────────────────────────────
-    // Builds a summary of recent SMS activity and injects it into the main
-    // SillyTavern chat context via setExtensionPrompt, so the main character
-    // (and NPCs) are aware of ongoing text conversations.
+    // ─── SMS + Call → Main Chat injection ───────────────────────────
+    // Builds a summary of recent SMS and call activity and injects it into
+    // the main SillyTavern chat context via setExtensionPrompt, so the main
+    // character (and NPCs) are aware of ongoing text AND phone conversations.
     function updateSmsInjection() {
         try {
             const ctx = getCtx();
             if (!ctx?.setExtensionPrompt) return;
 
             const myName = ctx?.name2 || ctx?.name || 'Character';
-            // Only inject SMS involving the CURRENT chat NPC — no omniscience
+            // Only inject comms involving the CURRENT chat NPC — no omniscience
             const npcName = (ctx.name2 || ctx.name || '').trim().toLowerCase();
             if (!npcName) {
                 ctx.setExtensionPrompt('PhoneSocial', null, 200, 0, true);
@@ -3653,26 +4126,50 @@ case 'open-thread':
             // Find the contact that matches the current chat NPC
             const contact = state.contacts.find(c => c.name.toLowerCase() === npcName);
             if (!contact) {
-                // No PhoneSocial contact for this NPC — clear any stale injection
                 ctx.setExtensionPrompt('PhoneSocial', null, 200, 0, true);
                 return;
             }
 
+            // ── Collect SMS thread entries ──
             const thread = state.threads[contact.id];
-            if (!Array.isArray(thread) || !thread.length) {
+            const smsEntries = (Array.isArray(thread) && thread.length)
+                ? thread.slice(-6).map(m => ({
+                    ts: m.ts || 0,
+                    speaker: m.from === 'me' ? myName : contact.name,
+                    text: m.text,
+                    channel: 'SMS'
+                }))
+                : [];
+
+            // ── Collect call utterances ──
+            const callEntries = (Array.isArray(state.callLog) && state.callLog.length)
+                ? state.callLog
+                    .filter(e => e.contactId === contact.id && e.dir === 'speak' && e.text)
+                    .slice(-6)
+                    .map(e => ({
+                        ts: e.ts || 0,
+                        speaker: e.fromMe ? myName : contact.name,
+                        text: e.text,
+                        channel: 'call'
+                    }))
+                : [];
+
+            // ── Merge by timestamp, take most recent 8 total ──
+            const allEntries = [...smsEntries, ...callEntries]
+                .sort((a, b) => a.ts - b.ts)
+                .slice(-8);
+
+            if (!allEntries.length) {
                 ctx.setExtensionPrompt('PhoneSocial', null, 200, 0, true);
                 return;
             }
 
-            // Inject only this NPC's SMS thread — they know what they texted
-            const recent = thread.slice(-6);
-            const lines = recent.map(m => {
-                const speaker = m.from === 'me' ? myName : contact.name;
-                return `${speaker} (SMS): ${m.text}`;
-            });
+            const lines = allEntries.map(e =>
+                `${e.speaker} (${e.channel}): ${e.text}`
+            );
 
-            const smsSummary = lines.join('\n');
-            const promptText = `[Your phone — recent texts with ${contact.name}]\n${smsSummary}`;
+            const summary = lines.join('\n');
+            const promptText = `[Your phone — recent comms with ${contact.name}]\n${summary}`;
 
             // Inject at depth 200 (low priority, after main narrative)
             ctx.setExtensionPrompt('PhoneSocial', promptText, 200, 0, true);
@@ -3791,7 +4288,7 @@ Rules:
                                 { role: 'system', content: systemPrompt },
                                 { role: 'user', content: userPrompt },
                             ],
-                            max_tokens: 3000, temperature: 0.3,
+                            max_tokens: 4000, temperature: 0.3,
                         }),
                     });
                     console.log('[PhoneSocial] turbo: response', res.status, 'from', url);
@@ -3856,8 +4353,8 @@ Rules:
         const myName = ctx?.name2 || ctx?.name || 'Character';
         const user = ctx?.name1 || 'You';
 
-        // Get up to 40 messages from main chat
-        const recent = ctx.chat.slice(-40);
+        // Get up to 80 messages from main chat (deeper scan)
+        const recent = ctx.chat.slice(-80);
         const msgs = recent.map(msg => {
             const name = msg.name || (msg.is_user ? user : myName);
             const text = (msg.mes || msg.text || '').trim();
@@ -3887,7 +4384,7 @@ Rules:
 
         const systemPrompt = `You are scanning a roleplay conversation transcript between "${user}" and "${myName}".
 
-Your ONLY job: Extract ALL NPCs (side characters) + relationship memories.
+Your ONLY job: Extract EVERY NPC (side character) + relationship memories.
 
 Return ONLY valid JSON (no markdown, no extra text):
 {
@@ -3899,11 +4396,12 @@ Return ONLY valid JSON (no markdown, no extra text):
   ]
 }
 
-RULES:
-- "npcs": MUST find EVERY side character. No exceptions. People who speak or are talked about — add them. No limit.
+MANDATORY RULES — NO EXCEPTIONS:
+- "npcs": Find EVERY side character. Every single person who speaks, is spoken to, or is mentioned by name. No limit. 2 is NOT enough unless this is a tiny transcript.
+- MINIMUM: If the transcript has 20+ messages, you MUST find at least 4 NPCs. If you return fewer than 4 with 20+ messages, you FAILED.
+- Scan every message individually. Do not skim. Characters mentioned once still count.
 - "memories": 1 to 5 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
-- Memories must be durable facts: promises, secrets, plans, betrayals, favors.
-- If you find only 0-2 NPCs, you are missing people. Re-read the transcript. Find more.
+- Memories must be durable facts: promises, secrets, plans, betrayals, favors, relationship changes.
 - npcs array MUST NOT be empty unless the transcript genuinely has zero side characters.`;
 
         const userPrompt = `Roleplay conversation transcript:\n\n${transcript}\n\nExtract ALL NPCs and relationship memories from this conversation. Do NOT skip anyone — find every side character.`;
