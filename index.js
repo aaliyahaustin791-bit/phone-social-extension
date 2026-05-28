@@ -1362,6 +1362,7 @@ function cleanThreads(threads) {
                 font-size:10px; color:#8e8e93;
                 align-self:flex-end; margin-right:8px; margin-bottom:6px;
             }
+            #phonesocial-panel .ps-receipt.ps-seen { color:#007aff; }
             /* ─── Date Dividers ─── */
             #phonesocial-panel .ps-date-divider {
                 text-align:center; font-size:11px; color:#8e8e93;
@@ -2348,7 +2349,9 @@ CRITICAL RULES:
                     const name = c?.name || id;
                     const last = state.threads[id]?.slice(-1)[0];
                     const time = last?.ts ? new Date(last.ts).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }) : '';
-                    const unread = false; // Future: track read state
+                    // Count unseen NPC messages (last message from 'them' and not yet seen)
+                    const lastMsg = state.threads[id]?.slice(-1)[0];
+                    const hasUnread = lastMsg && lastMsg.from === 'them' && !lastMsg.seen;
                     return `
                         <li data-act="open-thread" data-id="${id}">
                             <div class="ps-sms-avatar" style="background:${avatarGradient(name)}">${avatarInitial(name)}</div>
@@ -2357,7 +2360,7 @@ CRITICAL RULES:
                                 <div class="ps-sms-preview">${escape(last?.text || '')}</div>
                             </div>
                             <span class="ps-sms-time">${time}</span>
-                            ${unread ? '<span class="ps-sms-unread"></span>' : ''}
+                            ${hasUnread ? '<span class="ps-sms-unread"></span>' : ''}
                         </li>
                     `;
                 }).join('')}
@@ -2402,13 +2405,15 @@ CRITICAL RULES:
             `;
         }).join('');
 
-        // Read receipt: show "Read" if NPC replied after our last message
+        // iMessage-style read receipt for the LAST user message
         let receipt = '';
-        const lastMeIdx = msgs.reduce((acc, m, i) => m.from === 'me' ? i : acc, -1);
-        if (lastMeIdx >= 0) {
-            const hasReplyAfter = msgs.slice(lastMeIdx + 1).some(m => m.from === 'them');
-            receipt = hasReplyAfter
-                ? '<div class="ps-receipt">Read ✓</div>'
+        const lastMeMsg = msgs.reduce((acc, m, i) => m.from === 'me' ? { index: i, msg: m } : acc, null);
+        if (lastMeMsg) {
+            const seenTime = lastMeMsg.msg.seen
+                ? new Date(lastMeMsg.msg.ts).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' })
+                : '';
+            receipt = lastMeMsg.msg.seen
+                ? `<div class="ps-receipt ps-seen">Seen ${seenTime}</div>`
                 : '<div class="ps-receipt">Delivered</div>';
         }
 
@@ -2815,6 +2820,11 @@ function viewAlbums() {
 case 'open-thread':
                 state.activeContact = el.getAttribute('data-id');
                 if (!state.threads[state.activeContact]) state.threads[state.activeContact] = [];
+                // Mark all NPC messages in this thread as seen
+                const threadMsgs = state.threads[state.activeContact];
+                for (const m of threadMsgs) {
+                    if (m.from === 'them' && !m.seen) m.seen = true;
+                }
                 state.view = 'thread';
                 saveMeta();
                 render();
@@ -2852,7 +2862,7 @@ case 'open-thread':
                 const input = document.getElementById('ps-input');
                 const text = (input?.value || '').trim();
                 if (!text || !state.activeContact) return;
-                state.threads[state.activeContact].push({ from: 'me', text, ts: Date.now() });
+                state.threads[state.activeContact].push({ from: 'me', text, ts: Date.now(), seen: false });
                 updateSmsInjection(); // Inject SMS into main ST context
                 simulateReply(state.activeContact).catch(e => console.warn('[PhoneSocial] reply gen failed:', e));
                 saveMeta();
@@ -3670,7 +3680,12 @@ case 'open-thread':
         const delay = personality ? getResponseDelay(contact, personality) : (800 + Math.random() * 1500);
         setTimeout(() => {
             if (!state.threads[contactId]) return;
-            state.threads[contactId].push({ from: 'them', text, ts: Date.now() });
+            state.threads[contactId].push({ from: 'them', text, ts: Date.now(), seen: false });
+            // Mark the last user message as seen (NPC "read" it before replying)
+            const msgs = state.threads[contactId];
+            for (let i = msgs.length - 2; i >= 0; i--) {
+                if (msgs[i].from === 'me') { msgs[i].seen = true; break; }
+            }
             saveMeta();
             updateSmsInjection(); // Inject SMS into main ST context
             if (state.view === 'thread' && state.activeContact === contactId) render();
@@ -3882,7 +3897,7 @@ case 'open-thread':
         const text = aiReply;
         setTimeout(() => {
             if (!state.threads[contact.id]) return;
-            state.threads[contact.id].push({ from: 'them', text, ts: Date.now() });
+            state.threads[contact.id].push({ from: 'them', text, ts: Date.now(), seen: false });
             saveMeta();
             updateSmsInjection();
             if (state.view === 'thread' && state.activeContact === contact.id) render();
