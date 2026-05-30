@@ -18,7 +18,7 @@
         toastrEnabled: true,     // Show toastr notifications for incoming SMS/calls
     };
     const VIEW_HISTORY_LIMIT = 25;
-    const VALID_VIEWS = new Set(['home', 'contacts', 'sms', 'thread', 'dial', 'settings', 'albums', 'profile', 'memories', 'call', 'browser', 'chirp', 'chirp-thread']);
+    const VALID_VIEWS = new Set(['home', 'contacts', 'sms', 'thread', 'dial', 'settings', 'albums', 'profile', 'memories', 'call', 'browser', 'chirp', 'chirp-thread', 'favorites']);
 
     // -------------------------------------------------------------------
     // Per-chat state (reset on every CHAT_CHANGED)
@@ -27,6 +27,8 @@
     let isPanelOpen = false;
     let mainChatMsgCount = 0;  // For main-chat memory extraction throttle
     let metaLoaded = false;
+    let composeDraft = '';       // Survives view changes — preserves drafts when calls interrupt typing
+    let chatChangeDebounce = null; // 30ms CHAT_CHANGED debounce timer
 
     function freshState() {
         return {
@@ -146,66 +148,87 @@ function cleanThreads(threads) {
     function saveMeta() {
         const ctx = getCtx();
         const meta = getChatMeta();
-        if (!meta) return;
         // Strip _personality cache before save — it gets stale and bleeds across chats
         const contactsClean = state.contacts.map(c => {
             const { _personality, ...rest } = c;
             return rest;
         });
-        meta.contacts = contactsClean;
-        meta.threads = state.threads;
-        meta.callLog = state.callLog;
-        meta.voicemails = Array.isArray(state.voicemails) ? state.voicemails.slice(-20) : [];
-        meta.settings = state.settings;
-        meta.view = state.view;
-        meta.viewHistory = Array.isArray(state.viewHistory) ? state.viewHistory.slice(-VIEW_HISTORY_LIMIT) : [];
-        meta.activeContact = state.activeContact;
-        meta.activeCall = state.activeCall;
-        meta.dialBuf = state.dialBuf;
-        // Save browser state
+        // Pre-compute shared data regardless of save path availability
         const bh = Array.isArray(state.browserHistory) ? state.browserHistory.slice(-10).map(p => ({url: p.url, title: p.title, html: p.html})) : [];
-        meta.browserHistory = bh;
-        meta.browserIndex = state.browserIndex;
-        meta.browserUrl = state.browserUrl;
-        // Save chirp state
-        meta.chirpPosts = Array.isArray(state.chirpPosts) ? state.chirpPosts.map(p => ({
+        const chirpClean = Array.isArray(state.chirpPosts) ? state.chirpPosts.map(p => ({
             ...p,
             likedBy: Array.isArray(p.likedBy) ? p.likedBy : [],
             comments: Array.isArray(p.comments) ? p.comments : [],
         })) : [];
-        meta.chirpLastRefresh = state.chirpLastRefresh || 0;
-        // Primary save: chat metadata (may timeout if chat is already saving)
-        // Retry once if it fails
-        try { ctx?.saveMetadata?.(); } catch (_e1) {
-            setTimeout(() => { try { ctx?.saveMetadata?.(); } catch (_e2) {} }, 200);
+        const viewHistClean = Array.isArray(state.viewHistory) ? state.viewHistory.slice(-VIEW_HISTORY_LIMIT) : [];
+        const voicemailSave = Array.isArray(state.voicemails) ? state.voicemails.slice(-20) : [];
+        // Primary save: chat metadata (may be unavailable on hosted ST)
+        if (meta) {
+            meta.contacts = contactsClean;
+            meta.threads = state.threads;
+            meta.callLog = state.callLog;
+            meta.voicemails = voicemailSave;
+            meta.settings = state.settings;
+            meta.view = state.view;
+            meta.viewHistory = viewHistClean;
+            meta.activeContact = state.activeContact;
+            meta.activeCall = state.activeCall;
+            meta.dialBuf = state.dialBuf;
+            meta.browserHistory = bh;
+            meta.browserIndex = state.browserIndex;
+            meta.browserUrl = state.browserUrl;
+            meta.chirpPosts = chirpClean;
+            meta.chirpLastRefresh = state.chirpLastRefresh || 0;
+            try { ctx?.saveMetadata?.(); } catch (_e1) {
+                setTimeout(() => { try { ctx?.saveMetadata?.(); } catch (_e2) {} }, 200);
+            }
         }
-        // Backup save: extension_settings with chat-specific key
+        // Backup save: extension_settings + localStorage — ALWAYS runs
+        const chatKey = getChatKey();
+        const backupData = {
+            _backup: true,
+            _chatKey: chatKey,
+            contacts: contactsClean,
+            threads: state.threads,
+            callLog: state.callLog,
+            voicemails: voicemailSave,
+            settings: state.settings,
+            view: state.view,
+            viewHistory: viewHistClean,
+            activeContact: state.activeContact,
+            activeCall: state.activeCall,
+            dialBuf: state.dialBuf,
+            browserHistory: bh,
+            browserIndex: state.browserIndex,
+            browserUrl: state.browserUrl,
+            chirpPosts: chirpClean,
+            chirpLastRefresh: state.chirpLastRefresh || 0,
+        };
+        // ST extensionSettings path
         if (ctx?.extensionSettings) {
-            const chatKey = getChatKey();
-            ctx.extensionSettings[EXT_NAME + '_bk_' + chatKey] = {
-                _backup: true,
-                _chatKey: chatKey,
-                contacts: contactsClean,
-                threads: state.threads,
-                callLog: state.callLog,
-                voicemails: Array.isArray(state.voicemails) ? state.voicemails.slice(-20) : [],
-                settings: state.settings,
-                view: state.view,
-                viewHistory: Array.isArray(state.viewHistory) ? state.viewHistory.slice(-VIEW_HISTORY_LIMIT) : [],
-                activeContact: state.activeContact,
-                activeCall: state.activeCall,
-                dialBuf: state.dialBuf,
-                browserHistory: bh,
-                browserIndex: state.browserIndex,
-                browserUrl: state.browserUrl,
-                chirpPosts: Array.isArray(state.chirpPosts) ? state.chirpPosts.map(p => ({
-                    ...p,
-                    likedBy: Array.isArray(p.likedBy) ? p.likedBy : [],
-                    comments: Array.isArray(p.comments) ? p.comments : [],
-                })) : [],
-                chirpLastRefresh: state.chirpLastRefresh || 0,
-            };
-            try { ctx.saveSettingsDebounced?.(); } catch (_) { /* ignore */ }
+            ctx.extensionSettings[EXT_NAME + '_bk_' + chatKey] = backupData;
+            try {
+                if (typeof ctx.saveSettings === 'function') {
+                    ctx.saveSettings();
+                } else {
+                    ctx.saveSettingsDebounced?.();
+                }
+            } catch (_) { /* ignore */ }
+        }
+        // localStorage + sessionStorage fallback — survives ST web app quirks
+        try {
+            const lsKey = 'PhoneSocial_bk_' + chatKey;
+            const json = JSON.stringify(backupData);
+            localStorage.setItem(lsKey, json);
+            // Verify the write actually took (some browsers silently fail)
+            const verify = localStorage.getItem(lsKey);
+            if (!verify) {
+                console.warn('[PhoneSocial] localStorage write verification failed — data may not persist');
+            }
+            // Double-save to sessionStorage (survives tab restore on some mobile browsers)
+            try { sessionStorage.setItem(lsKey, json); } catch (_) {}
+        } catch (e) {
+            console.error('[PhoneSocial] localStorage save error:', e?.message || e);
         }
         // Clear in-memory _personality cache so next inferPersonality() is always fresh
         for (const c of state.contacts) {
@@ -216,7 +239,56 @@ function cleanThreads(threads) {
     function loadMeta() {
         const meta = getChatMeta();
         state = freshState();
-        if (meta) {
+        // ── Try localStorage FIRST (synchronous, survives app switches) ──
+        let loadedFromLocal = false;
+        try {
+            const chatKey = getChatKey();
+            let raw = localStorage.getItem('PhoneSocial_bk_' + chatKey);
+            // Fall back to sessionStorage (some mobile browsers restore from it)
+            if (!raw) {
+                try { raw = sessionStorage.getItem('PhoneSocial_bk_' + chatKey); } catch (_) {}
+            }
+            if (raw) {
+                const backup = JSON.parse(raw);
+                if (backup && backup._backup) {
+                    if (Array.isArray(backup.contacts)) {
+                        state.contacts = backup.contacts.filter(c => c.source !== 'st-character' && c.source !== 'st-group');
+                    }
+                    if (backup.threads && typeof backup.threads === 'object') {
+                        state.threads = cleanThreads(backup.threads);
+                    }
+                    if (Array.isArray(backup.callLog)) state.callLog = backup.callLog;
+                    if (Array.isArray(backup.voicemails)) state.voicemails = backup.voicemails;
+                    if (backup.settings && typeof backup.settings === 'object') {
+                        state.settings = { ...DEFAULT_SETTINGS, ...backup.settings };
+                    }
+                    if (backup.view && VALID_VIEWS.has(backup.view)) state.view = backup.view;
+                    if (Array.isArray(backup.viewHistory)) {
+                        state.viewHistory = backup.viewHistory.filter(v => VALID_VIEWS.has(v)).slice(-VIEW_HISTORY_LIMIT);
+                    }
+                    if (typeof backup.activeContact === 'string') state.activeContact = backup.activeContact;
+                    state.activeCall = null;
+                    if (state.view === 'call') state.view = 'home';
+                    if (typeof backup.dialBuf === 'string') state.dialBuf = backup.dialBuf;
+                    if (Array.isArray(backup.browserHistory)) {
+                        state.browserHistory = backup.browserHistory.slice(-10);
+                        state.browserIndex = (typeof backup.browserIndex === 'number') ? backup.browserIndex : -1;
+                        state.browserUrl = (typeof backup.browserUrl === 'string') ? backup.browserUrl : '';
+                    }
+                    if (Array.isArray(backup.chirpPosts)) {
+                        state.chirpPosts = backup.chirpPosts.map(p => ({
+                            ...p,
+                            likedBy: Array.isArray(p.likedBy) ? p.likedBy : [],
+                            comments: Array.isArray(p.comments) ? p.comments : [],
+                        }));
+                        state.chirpLastRefresh = backup.chirpLastRefresh || 0;
+                    }
+                    loadedFromLocal = true;
+                }
+            }
+        } catch (_) { /* ignore */ }
+        // ── Fall back to chatMetadata (server-side) if localStorage was empty ──
+        if (!loadedFromLocal && meta) {
             state.contacts = Array.isArray(meta.contacts)
                 ? meta.contacts.filter(c => c.source !== 'st-character' && c.source !== 'st-group')
                 : [];
@@ -252,8 +324,8 @@ function cleanThreads(threads) {
                 state.chirpLastRefresh = meta.chirpLastRefresh || 0;
             }
         }
-        // If no contacts found, try chat-specific backup
-        if (!state.contacts.length || !Object.keys(state.threads).length) {
+        // If still no contacts, try extensionSettings backup (skip localStorage — already tried)
+        if (!loadedFromLocal && (!state.contacts.length || !Object.keys(state.threads).length)) {
             try { tryLoadChatBackup(); } catch (_) {}
         }
         metaLoaded = true;
@@ -262,18 +334,27 @@ function cleanThreads(threads) {
 
     function tryLoadChatBackup() {
         const ctx = getCtx();
-        if (!ctx?.extensionSettings) return;
         const chatKey = getChatKey();
-        // Try chat-specific backup first
-        let backup = ctx.extensionSettings[EXT_NAME + '_bk_' + chatKey]
-            || ctx.extensionSettings[EXT_NAME + '_backup']; // fallback to old global key for migration
+        let backup = null;
+        // Try ST extensionSettings first
+        if (ctx?.extensionSettings) {
+            backup = ctx.extensionSettings[EXT_NAME + '_bk_' + chatKey]
+                || ctx.extensionSettings[EXT_NAME + '_backup']; // fallback to old global key for migration
+            // Clean up old global backup key after migration
+            if (backup && backup._chatKey === undefined && ctx.extensionSettings[EXT_NAME + '_backup']) {
+                delete ctx.extensionSettings[EXT_NAME + '_backup'];
+            }
+        }
+        // Fall back to localStorage
+        if ((!backup || !backup._backup) && typeof localStorage !== 'undefined') {
+            try {
+                const raw = localStorage.getItem('PhoneSocial_bk_' + chatKey);
+                if (raw) backup = JSON.parse(raw);
+            } catch (_) { /* ignore parse errors */ }
+        }
         if (!backup || !backup._backup) return;
         // Chat-specific check: skip if backup key doesn't match and it's global
         if (backup._chatKey && backup._chatKey !== chatKey) return;
-        // Clean up old global backup key after migration
-        if (backup._chatKey === undefined && ctx.extensionSettings[EXT_NAME + '_backup']) {
-            delete ctx.extensionSettings[EXT_NAME + '_backup'];
-        }
         // Only load contacts/threads if we have none (don't overwrite fresh harvest)
         if (!state.contacts.length && Array.isArray(backup.contacts)) {
             state.contacts = backup.contacts.filter(c => c.source !== 'st-character' && c.source !== 'st-group');
@@ -412,6 +493,7 @@ function cleanThreads(threads) {
                 name,
                 number: genNumber(),
                 source: 'npc',
+                starred: false,
             });
         }
         if (debug.length) console.log('[PhoneSocial] harvestNPCs:', debug);
@@ -474,6 +556,7 @@ function cleanThreads(threads) {
                     name,
                     number: genNumber(),
                     source: 'npc-tag',
+                    starred: false,
                 });
             }
 
@@ -491,6 +574,7 @@ function cleanThreads(threads) {
                     name,
                     number: genNumber(),
                     source: 'npc-tag',
+                    starred: false,
                 });
             }
 
@@ -518,6 +602,7 @@ function cleanThreads(threads) {
                 name,
                 number: genNumber(),
                 source: 'st-character',
+                starred: false,
             });
         }
         // Also grab group members if in a group chat
@@ -539,6 +624,7 @@ function cleanThreads(threads) {
                             name,
                             number: genNumber(),
                             source: 'st-group',
+                            starred: false,
                         });
                     }
                 }
@@ -621,6 +707,30 @@ function cleanThreads(threads) {
         let panel = document.getElementById('phonesocial-panel');
         if (panel) return panel;
         panel = document.createElement('div');
+        // Hidden file input for image attachments (created once, survives renders)
+        if (!document.getElementById('ps-image-input')) {
+            const fileInput = document.createElement('input');
+            fileInput.id = 'ps-image-input';
+            fileInput.type = 'file';
+            fileInput.accept = 'image/*';
+            fileInput.style.display = 'none';
+            fileInput.addEventListener('change', () => {
+                const file = fileInput.files?.[0];
+                if (!file || !state.activeContact) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    if (!state.threads[state.activeContact]) state.threads[state.activeContact] = [];
+                    state.threads[state.activeContact].push({ from: 'me', imageUrl: reader.result, ts: Date.now(), seen: false });
+                    saveMeta();
+                    render();
+                    simulateReply(state.activeContact).catch(e => console.warn('[PhoneSocial] reply gen failed:', e));
+                    updateSmsInjection();
+                };
+                reader.readAsDataURL(file);
+                fileInput.value = '';
+            });
+            document.body.appendChild(fileInput);
+        }
         panel.id = 'phonesocial-panel';
         panel.style.cssText = [
             'position:fixed',
@@ -1287,7 +1397,7 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-msg {
                 max-width:80%; padding:8px 14px; border-radius:16px;
                 margin:3px 0; font-size:13px; line-height:1.4;
-                word-wrap:break-word;
+                word-wrap:break-word; position:relative;
             }
             #phonesocial-panel .ps-msg.me {
                 background:#007aff; color:#fff;
@@ -1297,6 +1407,29 @@ function cleanThreads(threads) {
                 background:#e5e5ea; color:#1c1c1e;
                 border-bottom-left-radius:4px;
             }
+            #phonesocial-panel .ps-msg-img {
+                padding:4px !important; background:transparent !important;
+            }
+            #phonesocial-panel .ps-msg-img img { border-radius:6px; }
+            #phonesocial-panel .ps-msg-del {
+                display:none; position:absolute; top:-4px; right:-4px;
+                width:18px; height:18px; border-radius:50%; border:none;
+                background:rgba(255,69,58,0.9); color:#fff; font-size:12px;
+                line-height:18px; text-align:center; cursor:pointer; padding:0;
+            }
+            #phonesocial-panel .ps-msg:hover .ps-msg-del,
+            #phonesocial-panel .ps-msg:active .ps-msg-del { display:block; }
+            #phonesocial-panel .ps-sms-delete {
+                display:none; position:absolute; right:8px; top:50%; transform:translateY(-50%);
+                width:26px; height:26px; border-radius:50%; border:none;
+                background:rgba(255,69,58,0.85); color:#fff; font-size:14px;
+                line-height:26px; text-align:center; cursor:pointer; padding:0; z-index:2;
+            }
+            #phonesocial-panel .ps-sms-list li {
+                position:relative;
+            }
+            #phonesocial-panel .ps-sms-list li:hover .ps-sms-delete,
+            #phonesocial-panel .ps-sms-list li:active .ps-sms-delete { display:block; }
             #phonesocial-panel .ps-compose {
                 display:flex; gap:6px; padding:8px;
                 background:transparent; border-top:1px solid #c7c7cc;
@@ -1658,6 +1791,7 @@ function cleanThreads(threads) {
             'browser': 'Browser',
             'chirp': 'Chirp',
             'chirp-thread': 'Post',
+            'favorites': 'Favorites',
         };
         return titles[state.view] || 'PhoneSocial';
     }
@@ -1680,11 +1814,14 @@ function cleanThreads(threads) {
             case 'browser':  body = viewBrowser(); break;
             case 'chirp':    body = viewChirp(); break;
             case 'chirp-thread': body = viewChirpThread(); break;
+            case 'favorites': body = viewContacts(true); break;
             default:         body = viewHome();
         }
-        // Preserve compose input across re-renders (prevents typing wipe)
-        const savedInput = document.getElementById('ps-input');
-        const savedValue = savedInput ? savedInput.value : '';
+        // Stash compose draft to module-level var so it survives view changes (e.g., incoming call)
+        const currentInput = document.getElementById('ps-input');
+        if (currentInput && currentInput.value) {
+            composeDraft = currentInput.value;
+        }
         panel.innerHTML = `
             <div class="ps-phone-frame">
                 <div class="ps-statusbar">
@@ -1729,10 +1866,50 @@ function cleanThreads(threads) {
         `;
         bindPanel(panel);
 
-        // Restore compose input value after rebuild
-        if (savedValue) {
+        // Wire up contact search filter (real-time)
+        const searchInput = panel.querySelector('#ps-contact-search');
+        if (searchInput) {
+            searchInput.addEventListener('input', function() {
+                const query = this.value.toLowerCase().trim();
+                const sections = panel.querySelectorAll('.ps-contact-section');
+                let visibleCount = 0;
+                for (const sec of sections) {
+                    let sectionHasVisible = false;
+                    const rows = sec.querySelectorAll('.ps-contact-row');
+                    for (const row of rows) {
+                        const name = (row.getAttribute('data-search-name') || '').toLowerCase();
+                        if (!query || name.includes(query)) {
+                            row.style.display = '';
+                            sectionHasVisible = true;
+                            visibleCount++;
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    }
+                    sec.style.display = sectionHasVisible ? '' : 'none';
+                }
+                // Show/hide search results count
+                let hint = panel.querySelector('.ps-search-hint');
+                if (query && visibleCount === 0) {
+                    if (!hint) {
+                        hint = document.createElement('div');
+                        hint.className = 'ps-search-hint';
+                        hint.style.cssText = 'text-align:center;padding:16px;color:#8e8e93;font-size:13px';
+                        const wrap = panel.querySelector('.ps-contacts-wrap');
+                        if (wrap) wrap.appendChild(hint);
+                    }
+                    hint.textContent = 'No matching contacts';
+                    hint.style.display = '';
+                } else if (hint) {
+                    hint.style.display = 'none';
+                }
+            });
+        }
+
+        // Restore compose draft from module-level stash (survives view changes)
+        if (composeDraft) {
             const input = panel.querySelector('#ps-input');
-            if (input) { input.value = savedValue; input.focus(); }
+            if (input) { input.value = composeDraft; input.focus(); }
         }
 
         // Wire up close button once per render using the shared doClose handler
@@ -2109,8 +2286,8 @@ CRITICAL RULES:
                             <span class="ps-app-label" style="color:${textColor}">Contacts</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fcd34d,#fbbf24)" data-act="nav" data-view="albums">
-                            <span class="ps-app-icon">🖼️</span>
-                            <span class="ps-app-label" style="color:${textColor}">Albums</span>
+                            <span class="ps-app-icon">🎨</span>
+                            <span class="ps-app-label" style="color:${textColor}">Wallpapers</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)" data-act="nav" data-view="settings">
                             <span class="ps-app-icon">⚙️</span>
@@ -2124,7 +2301,7 @@ CRITICAL RULES:
                             <span class="ps-app-icon">🐦</span>
                             <span class="ps-app-label" style="color:${textColor}">Chirp</span>
                         </div>
-                        <div class="ps-app" style="background:linear-gradient(135deg,#fecaca,#f87171)">
+                        <div class="ps-app" style="background:linear-gradient(135deg,#fecaca,#f87171)" data-act="nav" data-view="favorites">
                             <span class="ps-app-icon">❤️</span>
                             <span class="ps-app-label" style="color:${textColor}">Favorites</span>
                         </div>
@@ -2263,7 +2440,7 @@ CRITICAL RULES:
         return escaped.replace(/@(\w+)/g, '<span style="color:#1d9bf0">@$1</span>');
     }
 
-    function viewContacts() {
+    function viewContacts(favoritesOnly) {
         if (!state.contacts.length) {
             return `<div class="ps-empty-state">
                 <div class="ps-empty-icon">👥</div>
@@ -2272,22 +2449,34 @@ CRITICAL RULES:
                 <button data-act="add-contact" class="ps-add-btn">+ Add Contact</button>
             </div>`;
         }
+        // Filter for favorites if requested
+        let pool = favoritesOnly
+            ? state.contacts.filter(c => c.starred)
+            : [...state.contacts];
+        if (favoritesOnly && !pool.length) {
+            return `<div class="ps-empty-state">
+                <div class="ps-empty-icon">⭐</div>
+                <p>No Favorites</p>
+                <span>Tap the ★ on a contact's profile to add them here.</span>
+            </div>`;
+        }
         // Sort alphabetically and group by first letter
-        const sorted = [...state.contacts].sort((a, b) => a.name.localeCompare(b.name));
+        const sorted = [...pool].sort((a, b) => a.name.localeCompare(b.name));
         const groups = {};
         for (const c of sorted) {
             const letter = c.name[0].toUpperCase();
             if (!groups[letter]) groups[letter] = [];
             groups[letter].push(c);
         }
+        const sectionCount = Object.keys(groups).length;
         const sections = Object.entries(groups).map(([letter, contacts]) => `
-            <div class="ps-contact-section">
+            <div class="ps-contact-section" data-section="${letter}">
                 <div class="ps-contact-section-header">${letter}</div>
                 ${contacts.map(c => `
-                    <div class="ps-contact-row" data-act="open-thread" data-id="${c.id}">
+                    <div class="ps-contact-row" data-act="open-thread" data-id="${c.id}" data-search-name="${escape(c.name.toLowerCase())}">
                         <div class="ps-avatar-sm" style="background:${avatarGradient(c.name)}">${avatarInitial(c.name)}</div>
                         <div class="ps-contact-row-info">
-                            <span class="ps-contact-row-name">${escape(c.name)}</span>
+                            <span class="ps-contact-row-name">${c.starred ? '★ ' : ''}${escape(c.name)}</span>
                             ${c.number ? `<span class="ps-contact-row-num">${escape(c.number)}</span>` : ''}
                         </div>
                         <button data-act="open-thread" data-id="${c.id}" class="ps-contact-call-btn" title="Message" style="margin-right:6px">💬</button>
@@ -2298,10 +2487,10 @@ CRITICAL RULES:
         `).join('');
 
         return `<div class="ps-contacts-wrap">
-            <div class="ps-contacts-search">
+            ${!favoritesOnly ? `<div class="ps-contacts-search">
                 <span>🔍</span>
-                <span style="color:#8e8e93;font-size:15px">Search</span>
-            </div>
+                <input type="text" id="ps-contact-search" placeholder="Search" autocomplete="off" style="flex:1;border:none;outline:none;background:transparent;font-size:15px;color:#1c1c1e">
+            </div>` : ''}
             ${sections}
             <div style="padding:12px;text-align:center">
                 <button data-act="add-contact" class="ps-add-btn">+ Add Contact</button>
@@ -2348,6 +2537,7 @@ CRITICAL RULES:
                     const c = state.contacts.find(x => x.id === id);
                     const name = c?.name || id;
                     const last = state.threads[id]?.slice(-1)[0];
+                    const lastPreview = last?.imageUrl ? '📷 Photo' : (last?.text || '');
                     const time = last?.ts ? new Date(last.ts).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }) : '';
                     // Count unseen NPC messages (last message from 'them' and not yet seen)
                     const lastMsg = state.threads[id]?.slice(-1)[0];
@@ -2357,10 +2547,11 @@ CRITICAL RULES:
                             <div class="ps-sms-avatar" style="background:${avatarGradient(name)}">${avatarInitial(name)}</div>
                             <div class="ps-sms-body">
                                 <div class="ps-sms-name">${escape(name)}</div>
-                                <div class="ps-sms-preview">${escape(last?.text || '')}</div>
+                                <div class="ps-sms-preview">${escape(lastPreview)}</div>
                             </div>
                             <span class="ps-sms-time">${time}</span>
                             ${hasUnread ? '<span class="ps-sms-unread"></span>' : ''}
+                            <button data-act="delete-thread" data-id="${id}" type="button" class="ps-sms-delete" title="Delete conversation">×</button>
                         </li>
                     `;
                 }).join('')}
@@ -2398,9 +2589,15 @@ CRITICAL RULES:
             const divider = curDate !== lastDate ? `<div class="ps-date-divider">${curDate}</div>` : '';
             lastDate = curDate;
             const time = fmtTime(m.ts);
+            const isImage = !!m.imageUrl;
             return `
                 ${divider}
-                <div class="ps-msg ps-${m.from}">${escape(m.text)}</div>
+                <div class="ps-msg ps-${m.from}${isImage ? ' ps-msg-img' : ''}">
+                    ${isImage
+                        ? `<img src="${m.imageUrl}" style="max-width:100%;max-height:240px;border-radius:8px;display:block" loading="lazy" alt="Photo" />`
+                        : escape(m.text || '')}
+                    <button data-act="delete-msg" data-id="${c.id}" data-msg-index="${i}" type="button" class="ps-msg-del" title="Delete message">×</button>
+                </div>
                 <span class="ps-msg-time ${m.from}">${time}</span>
             `;
         }).join('');
@@ -2428,6 +2625,7 @@ CRITICAL RULES:
                 <div class="ps-thread-actions">
                     <button data-act="open-profile" data-id="${c.id}" title="Contact Profile">📋</button>
                     <button data-act="call" data-id="${c.id}">📞</button>
+                    <button data-act="delete-thread" data-id="${c.id}" type="button" title="Delete conversation" style="background:rgba(255,69,58,0.15);color:#ff453a;border:none;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer">🗑️</button>
                 </div>
             </div>
             <div class="ps-thread" id="ps-thread-scroll">
@@ -2439,7 +2637,7 @@ CRITICAL RULES:
                 ${receipt}
             </div>
             <div class="ps-compose">
-                <button class="ps-compose-camera" title="Camera">📷</button>
+                <button data-act="attach-image" type="button" class="ps-compose-camera" title="Send Photo">📷</button>
                 <input id="ps-input" type="text" placeholder="Message…" />
                 <button data-act="send">Send</button>
             </div>
@@ -2716,9 +2914,9 @@ function viewDial() {
         const mems = Array.isArray(c.memories) && c.memories.length ? c.memories : [];
         return `
             <div class="ps-thread-head">
-                <button data-act="nav" data-view="sms">←</button>
+                <button data-act="nav" data-view="contacts">←</button>
                 <b>${escape(c.name)}</b>
-                <span></span>
+                <button data-act="toggle-star" data-id="${escape(c.id)}" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">${c.starred ? '★' : '☆'}</button>
             </div>
             <div style="padding:12px;color:#1c1c1e;flex:1;overflow-y:auto">
                 <p style="margin:0 0 4px;font-size:12px;color:#8e8e93">${escape(c.number)}</p>
@@ -2803,13 +3001,24 @@ function viewAlbums() {
                 return;
             case 'nav':
                 state.view = el.getAttribute('data-view');
-                if (state.view === 'contacts') {
+                if (state.view === 'contacts' || state.view === 'favorites') {
                     harvestNPCs();
                     purgeStaleContacts();
                 }
                 saveMeta();
                 render();
                 return;
+            
+            case 'toggle-star': {
+                const starId = el.getAttribute('data-id');
+                const contact = state.contacts.find(c => c.id === starId);
+                if (contact) {
+                    contact.starred = !contact.starred;
+                    saveMeta();
+                    render();
+                }
+                return;
+            }
             
             case 'open-profile':
                 state.activeContact = el.getAttribute('data-id');
@@ -2840,6 +3049,38 @@ case 'open-thread':
                 render();
                 return;
             }
+            case 'delete-thread': {
+                const delId = el.getAttribute('data-id');
+                if (!delId || !state.threads[delId]) return;
+                delete state.threads[delId];
+                if (state.activeContact === delId) {
+                    state.activeContact = null;
+                    state.view = 'sms';
+                }
+                saveMeta();
+                render();
+                return;
+            }
+            case 'delete-msg': {
+                const contactId = el.getAttribute('data-id');
+                const idx = parseInt(el.getAttribute('data-msg-index'), 10);
+                if (!contactId || !state.threads[contactId] || isNaN(idx)) return;
+                const thread = state.threads[contactId];
+                if (idx >= 0 && idx < thread.length) {
+                    thread.splice(idx, 1);
+                    // If thread is now empty, clean it up
+                    if (!thread.length) {
+                        delete state.threads[contactId];
+                        if (state.activeContact === contactId) {
+                            state.activeContact = null;
+                            state.view = 'sms';
+                        }
+                    }
+                }
+                saveMeta();
+                render();
+                return;
+            }
             case 'add-contact': {
                 const name = prompt('Enter NPC name:');
                 if (!name || !name.trim()) return;
@@ -2853,9 +3094,15 @@ case 'open-thread':
                     name: name.trim(),
                     number: genNumber(),
                     source: 'manual',
+                    starred: false,
                 });
                 saveMeta();
                 render();
+                return;
+            }
+            case 'attach-image': {
+                const fileInput = document.getElementById('ps-image-input');
+                if (fileInput) fileInput.click();
                 return;
             }
             case 'send': {
@@ -2863,6 +3110,7 @@ case 'open-thread':
                 const text = (input?.value || '').trim();
                 if (!text || !state.activeContact) return;
                 state.threads[state.activeContact].push({ from: 'me', text, ts: Date.now(), seen: false });
+                composeDraft = ''; // Clear draft on send
                 updateSmsInjection(); // Inject SMS into main ST context
                 simulateReply(state.activeContact).catch(e => console.warn('[PhoneSocial] reply gen failed:', e));
                 saveMeta();
@@ -3471,12 +3719,13 @@ case 'open-thread':
         const contact = state.contacts.find(c => c.id === contactId);
         if (!contact) return null;
         const ctx = getCtx();
-        const myName = ctx?.name2 || ctx?.name || 'Character';
+        const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
         const thread = state.threads[contactId] || [];
         const recentMessages = thread.slice(-10);
         const conversation = recentMessages.map(m => {
             const speaker = m.from === 'me' ? myName : contact.name;
-            return `${speaker}: ${m.text}`;
+            if (m.imageUrl) return `${speaker}: [sent a photo]`;
+            return `${speaker}: ${m.text || ''}`;
         }).join('\n');
         const otherContacts = state.contacts
             .filter(c => c.id !== contactId)
@@ -4130,7 +4379,7 @@ case 'open-thread':
             const ctx = getCtx();
             if (!ctx?.setExtensionPrompt) return;
 
-            const myName = ctx?.name2 || ctx?.name || 'Character';
+            const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
             // Only inject comms involving the CURRENT chat NPC — no omniscience
             const npcName = (ctx.name2 || ctx.name || '').trim().toLowerCase();
             if (!npcName) {
@@ -4151,7 +4400,7 @@ case 'open-thread':
                 ? thread.slice(-6).map(m => ({
                     ts: m.ts || 0,
                     speaker: m.from === 'me' ? myName : contact.name,
-                    text: m.text,
+                    text: m.imageUrl ? '[Photo]' : (m.text || ''),
                     channel: 'SMS'
                 }))
                 : [];
@@ -4213,13 +4462,14 @@ case 'open-thread':
         }
 
         const ctx = getCtx();
-        const myName = ctx?.name2 || ctx?.name || 'Character';
+        const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
         const user = ctx?.name1 || 'You';
 
         // Build conversation transcript
         const transcript = thread.slice(-20).map(m => {
             const speaker = m.from === 'me' ? myName : contact.name;
-            return `${speaker}: ${m.text}`;
+            if (m.imageUrl) return `${speaker}: [sent a photo]`;
+            return `${speaker}: ${m.text || ''}`;
         }).join('\n');
 
         const systemPrompt = `You are extracting ONLY vital, relationship-relevant memories from SMS/text conversations between "${myName}" and "${contact.name}".
@@ -4365,7 +4615,7 @@ Rules:
         if (!ctx?.chat || !Array.isArray(ctx.chat)) return 0;
         const contacts = state.contacts;
 
-        const myName = ctx?.name2 || ctx?.name || 'Character';
+        const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
         const user = ctx?.name1 || 'You';
 
         // Get up to 80 messages from main chat (deeper scan)
@@ -4867,16 +5117,17 @@ Rules:
         }
         const before = state.contacts.length;
         state.contacts = state.contacts.filter(c => {
-            if (isBlocked(c.name, blocked)) {
-                console.log(`[PhoneSocial] purge: blocked "${c.name}"`);
-                return false;
-            }
-            // Manual and scan-discovered contacts are always kept
+            // Manual and scan-discovered contacts are always kept — check BEFORE isBlocked
+            // because isBlocked uses fuzzy includes() matching that can catch manual names
             if (c.source === 'manual') return true;
             // Scan-discovered NPCs come from API memory extraction — they exist in
             // conversation content but aren't necessarily chat senders, so the sender
             // check below would incorrectly remove them immediately.
             if (c.source === 'scan') return true;
+            if (isBlocked(c.name, blocked)) {
+                console.log(`[PhoneSocial] purge: blocked "${c.name}"`);
+                return false;
+            }
             // Remove names with non-standard characters (+, #, etc) — corrupted
             if (/[+#*@]/.test(c.name)) {
                 console.log(`[PhoneSocial] purge: suspicious name "${c.name}"`);
@@ -4908,8 +5159,11 @@ Rules:
     }
 
     function onChatChanged() {
-        // Defer to next frame so ST's chat loading pipeline isn't blocked
-        requestAnimationFrame(() => {
+        // Debounce: ST fires CHAT_CHANGED multiple times in rapid succession during page load.
+        // Only the last call in a 30ms burst actually executes to prevent race conditions.
+        if (chatChangeDebounce) { clearTimeout(chatChangeDebounce); chatChangeDebounce = null; }
+        chatChangeDebounce = setTimeout(() => {
+            chatChangeDebounce = null;
             // Clear SMS injection from previous chat to prevent data bleed
             try {
                 const ctx = getCtx();
@@ -4931,7 +5185,7 @@ Rules:
             }
             const panel = document.getElementById('phonesocial-panel');
             if (panel && panel.style.display !== 'none') render();
-        });
+        }, 30);
     }
 
     function hookEvents() {
