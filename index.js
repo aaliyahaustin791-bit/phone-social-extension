@@ -1624,6 +1624,14 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-incoming-banner-text span {
                 font-size:12px; color:#8e8e93; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
             }
+            #phonesocial-panel .ps-banner-dismiss {
+                background:none; border:none; color:#8e8e93; font-size:14px;
+                padding:4px 6px; cursor:pointer; border-radius:50%;
+                flex-shrink:0; line-height:1;
+            }
+            #phonesocial-panel .ps-banner-dismiss:active {
+                background:rgba(0,0,0,0.1); color:#3a3a3c;
+            }
             /* ─── Albums / Wallpaper Picker ─── */
             #phonesocial-panel .ps-albums { padding:4px 0; }
             #phonesocial-panel .ps-albums-header {
@@ -1698,14 +1706,15 @@ function cleanThreads(threads) {
         banner.setAttribute('data-id', contact.id);
         banner.innerHTML = '<div class="ps-avatar-sm" style="background:' + avatarGradient(contact.name || '') + '">' + avatarInitial(contact.name || '?') + '</div>'
             + '<div class="ps-incoming-banner-text"><b>' + escape(contact.name || 'Unknown') + '</b>'
-            + '<span>' + escape((text || '').slice(0, 80)) + '</span></div>';
+            + '<span>' + escape((text || '').slice(0, 80)) + '</span></div>'
+            + '<button data-act="dismiss-banner" class="ps-banner-dismiss" title="Dismiss">✕</button>';
         body.parentNode.insertBefore(banner, body);
-        // Auto-dismiss after 5s
+        // Auto-dismiss after 3s
         setTimeout(() => {
             const b = panel.querySelector('.ps-incoming-banner');
             if (b) b.remove();
             state.incomingBanner = null;
-        }, 5000);
+        }, 3000);
     }
 
     function togglePanel() {
@@ -1853,6 +1862,7 @@ function cleanThreads(threads) {
                         <b>${escape(state.incomingBanner.name || 'Unknown')}</b>
                         <span>${escape((state.incomingBanner.text || '').slice(0, 80))}</span>
                     </div>
+                    <button data-act="dismiss-banner" class="ps-banner-dismiss" title="Dismiss">✕</button>
                 </div>` : ''}
                 <div class="ps-body">${body}</div>
                 <div class="ps-nav" style="${state.view === 'call' ? 'display:none' : ''}">
@@ -2623,6 +2633,7 @@ CRITICAL RULES:
                     ${isTyping ? '<div style="font-size:11px;color:#34c759">typing…</div>' : ''}
                 </div>
                 <div class="ps-thread-actions">
+                    <button data-act="toggle-star" data-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}" style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px 6px">${c.starred ? '★' : '☆'}</button>
                     <button data-act="open-profile" data-id="${c.id}" title="Contact Profile">📋</button>
                     <button data-act="call" data-id="${c.id}">📞</button>
                     <button data-act="delete-thread" data-id="${c.id}" type="button" title="Delete conversation" style="background:rgba(255,69,58,0.15);color:#ff453a;border:none;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer">🗑️</button>
@@ -3009,6 +3020,14 @@ function viewAlbums() {
                 render();
                 return;
             
+            case 'dismiss-banner':
+                ev.stopPropagation();
+                state.incomingBanner = null;
+                const b = document.querySelector('.ps-incoming-banner');
+                if (b) b.remove();
+                render();
+                return;
+
             case 'toggle-star': {
                 const starId = el.getAttribute('data-id');
                 const contact = state.contacts.find(c => c.id === starId);
@@ -3026,13 +3045,17 @@ function viewAlbums() {
                 saveMeta();
                 render();
                 return;
-case 'open-thread':
+            case 'open-thread':
                 state.activeContact = el.getAttribute('data-id');
                 if (!state.threads[state.activeContact]) state.threads[state.activeContact] = [];
                 // Mark all NPC messages in this thread as seen
                 const threadMsgs = state.threads[state.activeContact];
                 for (const m of threadMsgs) {
                     if (m.from === 'them' && !m.seen) m.seen = true;
+                }
+                // Dismiss incoming banner if opening the matching thread
+                if (state.incomingBanner && state.incomingBanner.contactId === state.activeContact) {
+                    state.incomingBanner = null;
                 }
                 state.view = 'thread';
                 saveMeta();
