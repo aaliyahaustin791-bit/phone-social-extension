@@ -2096,65 +2096,82 @@ function cleanThreads(threads) {
             });
         }
 
-        // Wire up notification shade pull-down gesture
+        // Wire up notification shade: tap status bar to toggle
         const shade = panel.querySelector('#ps-notif-shade');
-        const shadeContent = shade ? shade.querySelector('.ps-notif-content') : null;
         const shadeBg = shade ? shade.querySelector('.ps-notif-bg') : null;
-        if (shade && shadeContent) {
-            let sy = 0, pulling = false, shadeFullHeight = 0;
+        const statusbar = panel.querySelector('.ps-statusbar');
 
-            const onShadeStart = (e) => {
+        if (statusbar && shade) {
+            statusbar.style.cursor = 'pointer';
+            statusbar.addEventListener('click', (e) => {
+                e.stopPropagation();
+                notifShadeOpen = !notifShadeOpen;
+                if (notifShadeOpen) {
+                    shade.classList.add('ps-notif-open');
+                    shade.style.maxHeight = '';
+                } else {
+                    shade.classList.remove('ps-notif-open');
+                    shade.style.maxHeight = '';
+                }
+            });
+        }
+
+        if (shadeBg) {
+            shadeBg.addEventListener('click', () => {
+                notifShadeOpen = false;
+                shade.classList.remove('ps-notif-open');
+                shade.style.maxHeight = '';
+            });
+        }
+
+        // Pull-down gesture: track touches starting near the top of the panel
+        if (shade) {
+            // Clean up old listeners to prevent accumulation across renders
+            if (panel._pdCleanup) {
+                panel.removeEventListener('touchstart', panel._pdCleanup.start);
+                panel.removeEventListener('touchmove', panel._pdCleanup.move);
+                panel.removeEventListener('touchend', panel._pdCleanup.end);
+            }
+
+            let pdStartY = 0, pdPulling = false, pdShadeFull = 280;
+
+            const onPdStart = (e) => {
                 if (notifShadeOpen) return;
-                const t = e.touches?.[0] || e;
-                // Get panel-relative Y by subtracting panel's bounding rect
-                const panelRect = panel.getBoundingClientRect();
-                const relY = t.clientY - panelRect.top;
-                if (relY > 60) return; // Only respond to top ~60px of panel
-                sy = t.clientY;
-                pulling = true;
-                shadeFullHeight = Math.min(shadeContent.scrollHeight, panelRect.height * 0.7);
+                const t = e.touches[0];
+                const rect = panel.getBoundingClientRect();
+                if (t.clientY - rect.top > 50) return;
+                pdStartY = t.clientY;
+                pdPulling = true;
+                pdShadeFull = Math.min(280, rect.height * 0.7);
                 shade.classList.add('ps-notif-dragging');
             };
 
-            const onShadeMove = (e) => {
-                if (!pulling) return;
-                const t = e.touches?.[0] || e;
-                const dy = t.clientY - sy;
-                if (dy < 5 && !notifShadeOpen) { pulling = false; shade.classList.remove('ps-notif-dragging'); return; }
-                const progress = Math.min(1, Math.max(0, dy / shadeFullHeight));
-                shade.style.maxHeight = Math.round(progress * shadeFullHeight) + 'px';
+            const onPdMove = (e) => {
+                if (!pdPulling || notifShadeOpen) return;
+                const dy = e.touches[0].clientY - pdStartY;
+                if (dy < 8) return;
+                const pct = Math.min(1, dy / pdShadeFull);
+                shade.style.maxHeight = Math.round(pct * pdShadeFull) + 'px';
             };
 
-            const onShadeEnd = (e) => {
-                if (!pulling) return;
-                pulling = false;
+            const onPdEnd = (e) => {
+                if (!pdPulling) return;
+                pdPulling = false;
                 shade.classList.remove('ps-notif-dragging');
-                const t = e.changedTouches?.[0] || e;
-                const dy = t.clientY - sy;
-                if (dy > shadeFullHeight * 0.25) {
-                    // Open shade
+                const dy = (e.changedTouches[0]?.clientY || 0) - pdStartY;
+                if (dy > pdShadeFull * 0.25) {
                     notifShadeOpen = true;
                     shade.classList.add('ps-notif-open');
                     shade.style.maxHeight = '';
                 } else {
-                    // Snap closed
-                    notifShadeOpen = false;
-                    shade.classList.remove('ps-notif-open');
                     shade.style.maxHeight = '';
                 }
             };
 
-            if (shadeBg) {
-                shadeBg.addEventListener('click', () => {
-                    notifShadeOpen = false;
-                    shade.classList.remove('ps-notif-open');
-                    shade.style.maxHeight = '';
-                });
-            }
-
-            panel.addEventListener('touchstart', onShadeStart, { passive: true });
-            panel.addEventListener('touchmove', onShadeMove, { passive: true });
-            panel.addEventListener('touchend', onShadeEnd, { passive: true });
+            panel.addEventListener('touchstart', onPdStart, { passive: true });
+            panel.addEventListener('touchmove', onPdMove, { passive: false });
+            panel.addEventListener('touchend', onPdEnd, { passive: true });
+            panel._pdCleanup = { start: onPdStart, move: onPdMove, end: onPdEnd };
         }
 
         // Restore compose draft from module-level stash (survives view changes)
