@@ -3750,6 +3750,11 @@ function viewAlbums() {
             if (m.imageUrl) return `${speaker}: [sent a photo]`;
             return `${speaker}: ${m.text || ''}`;
         }).join('\n');
+
+        // Detect if the last message is from the NPC themselves — nothing to "reply" to.
+        // In that case, this is a follow-up / double-text, not a reply.
+        const lastMsg = recentMessages[recentMessages.length - 1];
+        const isFollowUp = lastMsg && lastMsg.from === 'them';
         const otherContacts = state.contacts
             .filter(c => c.id !== contactId)
             .map(c => `- ${c.name}`)
@@ -3819,8 +3824,12 @@ function viewAlbums() {
                 (otherContacts ? `\n\nOther contacts you know:\n${otherContacts}` : '') +
                 (npcMemories ? npcMemories : '') +
                 (mainChatContext ? mainChatContext : '') +
-                `\n\nYou are currently texting ${myName} (also called you).\nCRITICAL: Send ONLY the SMS text. No narration, stage directions, asterisks, or commentary about the scene.`;
-            const userMsg = `SMS conversation with ${myName}:\n${conversation || '(no messages yet)'}\n\nWrite ONLY the SMS reply from ${charName} to ${myName}. Just the text message — casual, natural, concise. No narration.`;
+                (isFollowUp
+                    ? `\n\nYou are currently texting ${myName} (also called you). They haven't responded to your last message yet.\nCRITICAL: Send a natural follow-up text. Do NOT answer your own question or speak for ${myName}. Keep it in YOUR voice only. No narration, stage directions, asterisks.`
+                    : `\n\nYou are currently texting ${myName} (also called you).\nCRITICAL: Send ONLY the SMS text. No narration, stage directions, asterisks, or commentary about the scene.`);
+            const userMsg = isFollowUp
+                ? `SMS conversation:\n${conversation || '(no messages yet)'}\n\nThe last message was from you — ${myName} hasn't replied yet. Write a follow-up text from ${charName}. Stay in character. Just the text message — casual, natural, concise. No narration.`
+                : `SMS conversation with ${myName}:\n${conversation || '(no messages yet)'}\n\nWrite ONLY the SMS reply from ${charName} to ${myName}. Just the text message — casual, natural, concise. No narration.`;
 
             // Build URL candidates from raw input
             const urlCandidates = buildApiUrlCandidates(rawUrl);
@@ -3880,7 +3889,9 @@ function viewAlbums() {
                 'You are ' + contact.name + '.',
                 charDesc ? charDesc : '',
                 'You are texting ' + myName + ' via SMS on your phone.',
-                'CRITICAL: Reply with ONLY the SMS text. No narration, no stage directions, no asterisks, no commentary about the scene. Just what you would type on a phone.',
+                isFollowUp
+                    ? 'CRITICAL: Send a natural follow-up text. Do NOT answer your own question or speak for ' + myName + '. Keep it in YOUR voice only. No narration, no stage directions, no asterisks.'
+                    : 'CRITICAL: Reply with ONLY the SMS text. No narration, no stage directions, no asterisks, no commentary about the scene. Just what you would type on a phone.',
             ].filter(Boolean).join(' ');
 
             const userMsg = [
@@ -3888,8 +3899,9 @@ function viewAlbums() {
                 chatSnippet ? 'Recent events: ' + chatSnippet : '',
                 'SMS conversation with ' + myName + ':',
                 convoSnippet || '(no messages yet)',
+                isFollowUp ? myName + ' hasn\'t replied to your last message yet.' : '',
                 '',
-                'Your reply:',
+                isFollowUp ? 'Your follow-up:' : 'Your reply:',
             ].filter(Boolean).join('\n');
 
             const body = JSON.stringify({
