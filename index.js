@@ -768,6 +768,7 @@ function cleanThreads(threads) {
         style.textContent = `
             /* ─── Phone Outer Container (slide-in) ─── */
             #phonesocial-panel {
+                position:relative;
                 border-radius:0 !important;
                 overflow:hidden !important;
                 border:none !important;
@@ -1635,14 +1636,17 @@ function cleanThreads(threads) {
             }
             /* ─── Notification Shade (pull-down) ─── */
             #phonesocial-panel .ps-notif-shade {
-                position:absolute; top:0; left:0; right:0; bottom:0; z-index:100;
-                pointer-events:none; overflow:hidden;
-                transform:translateY(-100%);
-                transition:transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.3s ease-out;
-                opacity:0;
+                position:absolute; top:0; left:0; right:0; z-index:100;
+                max-height:0; overflow:hidden;
+                transition:max-height 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+                pointer-events:none;
+                contain:layout style;
             }
             #phonesocial-panel .ps-notif-shade.ps-notif-open {
-                transform:translateY(0); opacity:1; pointer-events:auto;
+                max-height:70%; pointer-events:auto;
+            }
+            #phonesocial-panel .ps-notif-shade.ps-notif-dragging {
+                transition:none;
             }
             #phonesocial-panel .ps-notif-bg {
                 position:absolute; inset:0; background:rgba(0,0,0,0.3);
@@ -2097,54 +2101,46 @@ function cleanThreads(threads) {
         const shadeContent = shade ? shade.querySelector('.ps-notif-content') : null;
         const shadeBg = shade ? shade.querySelector('.ps-notif-bg') : null;
         if (shade && shadeContent) {
-            let sy = 0, pulling = false, startY = 0, shadeHeight = 0;
+            let sy = 0, pulling = false, shadeFullHeight = 0;
 
             const onShadeStart = (e) => {
-                if (notifShadeOpen) return; // Only track when closed
+                if (notifShadeOpen) return;
                 const t = e.touches?.[0] || e;
-                // Only respond to touches near the top of the panel
-                if (t.clientY > 80) return;
+                // Get panel-relative Y by subtracting panel's bounding rect
+                const panelRect = panel.getBoundingClientRect();
+                const relY = t.clientY - panelRect.top;
+                if (relY > 60) return; // Only respond to top ~60px of panel
                 sy = t.clientY;
-                startY = t.clientY;
                 pulling = true;
-                shadeHeight = shadeContent.offsetHeight || 280;
-                shade.style.transition = 'none';
-                shadeContent.style.transition = 'none';
+                shadeFullHeight = Math.min(shadeContent.scrollHeight, panelRect.height * 0.7);
+                shade.classList.add('ps-notif-dragging');
             };
 
             const onShadeMove = (e) => {
                 if (!pulling) return;
                 const t = e.touches?.[0] || e;
                 const dy = t.clientY - sy;
-                if (dy < 0 && !notifShadeOpen) { pulling = false; return; }
-                const progress = Math.min(1, Math.max(0, (t.clientY - startY) / shadeHeight));
-                shade.style.transform = `translateY(${notifShadeOpen ? 0 : Math.round(-shadeHeight + dy)}px)`;
-                shade.style.opacity = Math.min(1, progress * 1.5);
+                if (dy < 5 && !notifShadeOpen) { pulling = false; shade.classList.remove('ps-notif-dragging'); return; }
+                const progress = Math.min(1, Math.max(0, dy / shadeFullHeight));
+                shade.style.maxHeight = Math.round(progress * shadeFullHeight) + 'px';
             };
 
             const onShadeEnd = (e) => {
                 if (!pulling) return;
                 pulling = false;
-                shade.style.transition = 'transform 0.25s ease-out, opacity 0.25s ease-out';
-                shadeContent.style.transition = '';
+                shade.classList.remove('ps-notif-dragging');
                 const t = e.changedTouches?.[0] || e;
-                const dy = t.clientY - startY;
-                if (dy > shadeHeight * 0.3 && !notifShadeOpen) {
+                const dy = t.clientY - sy;
+                if (dy > shadeFullHeight * 0.25) {
                     // Open shade
                     notifShadeOpen = true;
                     shade.classList.add('ps-notif-open');
-                    shade.style.transform = '';
-                    shade.style.opacity = '';
-                } else if (dy < -30 && notifShadeOpen) {
-                    // Close shade
+                    shade.style.maxHeight = '';
+                } else {
+                    // Snap closed
                     notifShadeOpen = false;
                     shade.classList.remove('ps-notif-open');
-                    shade.style.transform = '';
-                    shade.style.opacity = '';
-                } else {
-                    // Snap back
-                    shade.style.transform = '';
-                    shade.style.opacity = '';
+                    shade.style.maxHeight = '';
                 }
             };
 
@@ -2152,8 +2148,7 @@ function cleanThreads(threads) {
                 shadeBg.addEventListener('click', () => {
                     notifShadeOpen = false;
                     shade.classList.remove('ps-notif-open');
-                    shade.style.transform = '';
-                    shade.style.opacity = '';
+                    shade.style.maxHeight = '';
                 });
             }
 
@@ -3256,7 +3251,7 @@ function viewAlbums() {
         if (notifShadeOpen && act !== 'close-shade' && act !== 'clear-notifs') {
             notifShadeOpen = false;
             const s = document.getElementById('ps-notif-shade');
-            if (s) { s.classList.remove('ps-notif-open'); s.style.transform = ''; s.style.opacity = ''; }
+            if (s) { s.classList.remove('ps-notif-open'); s.style.maxHeight = ''; }
         }
         switch (act) {
             case 'close':
@@ -3285,8 +3280,7 @@ function viewAlbums() {
                 const shadeEl = document.getElementById('ps-notif-shade');
                 if (shadeEl) {
                     shadeEl.classList.remove('ps-notif-open');
-                    shadeEl.style.transform = '';
-                    shadeEl.style.opacity = '';
+                    shadeEl.style.maxHeight = '';
                 }
                 return;
 
