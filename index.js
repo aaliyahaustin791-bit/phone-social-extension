@@ -29,6 +29,7 @@
     let metaLoaded = false;
     let composeDraft = '';       // Survives view changes — preserves drafts when calls interrupt typing
     let chatChangeDebounce = null; // 30ms CHAT_CHANGED debounce timer
+    let notifShadeOpen = false;  // Pull-down notification shade state
 
     function freshState() {
         return {
@@ -1632,6 +1633,87 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-banner-dismiss:active {
                 background:rgba(0,0,0,0.1); color:#3a3a3c;
             }
+            /* ─── Notification Shade (pull-down) ─── */
+            #phonesocial-panel .ps-notif-shade {
+                position:absolute; top:0; left:0; right:0; bottom:0; z-index:100;
+                pointer-events:none; overflow:hidden;
+                transform:translateY(-100%);
+                transition:transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.3s ease-out;
+                opacity:0;
+            }
+            #phonesocial-panel .ps-notif-shade.ps-notif-open {
+                transform:translateY(0); opacity:1; pointer-events:auto;
+            }
+            #phonesocial-panel .ps-notif-bg {
+                position:absolute; inset:0; background:rgba(0,0,0,0.3);
+                -webkit-tap-highlight-color:transparent;
+            }
+            #phonesocial-panel .ps-notif-content {
+                position:absolute; top:0; left:0; right:0;
+                background:rgba(28,28,30,0.95);
+                backdrop-filter:blur(20px);
+                -webkit-backdrop-filter:blur(20px);
+                border-radius:0 0 20px 20px;
+                padding:0 0 12px;
+                max-height:70%;
+                overflow-y:auto;
+                box-shadow:0 4px 24px rgba(0,0,0,0.4);
+            }
+            #phonesocial-panel .ps-notif-header {
+                display:flex; align-items:center; gap:8px;
+                padding:12px 16px 8px;
+                border-bottom:1px solid rgba(255,255,255,0.1);
+            }
+            #phonesocial-panel .ps-notif-header-time {
+                font-size:13px; font-weight:600; color:#fff;
+            }
+            #phonesocial-panel .ps-notif-header-date {
+                font-size:11px; color:rgba(255,255,255,0.5);
+            }
+            #phonesocial-panel .ps-notif-clear {
+                margin-left:auto; background:none; border:none;
+                color:#0a84ff; font-size:13px; cursor:pointer;
+                padding:4px 8px; border-radius:6px;
+            }
+            #phonesocial-panel .ps-notif-clear:active { background:rgba(10,132,255,0.15); }
+            #phonesocial-panel .ps-notif-list {
+                padding:4px 0;
+            }
+            #phonesocial-panel .ps-notif-empty {
+                text-align:center; padding:24px 16px;
+                color:rgba(255,255,255,0.4); font-size:14px;
+            }
+            #phonesocial-panel .ps-notif-item {
+                display:flex; align-items:center; gap:10px;
+                padding:10px 16px; cursor:pointer;
+                -webkit-tap-highlight-color:transparent;
+            }
+            #phonesocial-panel .ps-notif-item:active { background:rgba(255,255,255,0.08); }
+            #phonesocial-panel .ps-notif-icon {
+                width:32px; height:32px; border-radius:8px;
+                display:flex; align-items:center; justify-content:center;
+                font-size:15px; flex-shrink:0;
+            }
+            #phonesocial-panel .ps-notif-body {
+                flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;
+            }
+            #phonesocial-panel .ps-notif-name {
+                font-size:13px; font-weight:600;
+            }
+            #phonesocial-panel .ps-notif-text {
+                font-size:12px; color:rgba(255,255,255,0.6);
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+            }
+            #phonesocial-panel .ps-notif-time {
+                font-size:11px; color:rgba(255,255,255,0.4); flex-shrink:0;
+            }
+            #phonesocial-panel .ps-notif-handle {
+                display:flex; justify-content:center; padding:8px 0 4px;
+            }
+            #phonesocial-panel .ps-notif-handle span {
+                width:36px; height:5px; border-radius:3px;
+                background:rgba(255,255,255,0.3);
+            }
             /* ─── Albums / Wallpaper Picker ─── */
             #phonesocial-panel .ps-albums { padding:4px 0; }
             #phonesocial-panel .ps-albums-header {
@@ -1805,6 +1887,99 @@ function cleanThreads(threads) {
         return titles[state.view] || 'PhoneSocial';
     }
 
+    // ─── Notification Shade (pull-down) ──────────────────────────────
+    function buildNotifShade() {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+        const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}`;
+
+        const items = [];
+
+        // Unread SMS
+        for (const [cid, thread] of Object.entries(state.threads)) {
+            if (!Array.isArray(thread) || !thread.length) continue;
+            const unread = thread.filter(m => m.from === 'them' && !m.seen);
+            for (const m of unread.slice(-3)) {
+                const c = state.contacts.find(x => x.id === cid);
+                items.push({
+                    type: 'sms', icon: '💬', contactId: cid,
+                    name: c?.name || cid, text: (m.text || '').slice(0, 80),
+                    ts: m.ts, act: 'open-thread', color: '#34c759'
+                });
+            }
+        }
+
+        // Missed/declined calls
+        const missedCalls = (state.callLog || []).filter(e => e.dir === 'missed' || e.dir === 'declined');
+        for (const e of missedCalls.slice(-5)) {
+            const c = state.contacts.find(x => x.id === e.contactId);
+            items.push({
+                type: 'call', icon: e.dir === 'missed' ? '📞' : '📵', contactId: e.contactId,
+                name: c?.name || 'Unknown',
+                text: e.dir === 'missed' ? 'Missed call' : 'Declined call',
+                ts: e.ts, act: 'open-thread', color: '#ff3b30'
+            });
+        }
+
+        // Unheard voicemails
+        const unheardVm = (state.voicemails || []).filter(v => !v.heard);
+        for (const vm of unheardVm.slice(-5)) {
+            const c = state.contacts.find(x => x.id === vm.contactId);
+            items.push({
+                type: 'voicemail', icon: '🎙️', contactId: vm.contactId,
+                name: c?.name || 'Unknown',
+                text: (vm.text || '').slice(0, 80),
+                ts: vm.ts, act: 'play-voicemail', color: '#ff9500', vmTs: vm.ts
+            });
+        }
+
+        // Sort by time, newest first
+        items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+        const fmtTime = ts => {
+            const d = new Date(ts);
+            const diff = Date.now() - ts;
+            if (diff < 60000) return 'now';
+            if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+            if (diff < 86400000) return d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+            return d.toLocaleDateString([], { month:'short', day:'numeric' });
+        };
+
+        const itemHtml = items.length
+            ? items.map(item => {
+                const extraAttr = item.type === 'voicemail' ? ` data-vm-ts="${item.vmTs}"` : '';
+                return `<div class="ps-notif-item" data-act="${item.act}" data-id="${item.contactId}"${extraAttr}>
+                    <span class="ps-notif-icon" style="background:${item.color}20;color:${item.color}">${item.icon}</span>
+                    <div class="ps-notif-body">
+                        <span class="ps-notif-name" style="color:${item.color}">${escape(item.name)}</span>
+                        <span class="ps-notif-text">${escape(item.text)}</span>
+                    </div>
+                    <span class="ps-notif-time">${fmtTime(item.ts)}</span>
+                </div>`;
+            }).join('')
+            : '<div class="ps-notif-empty">No notifications</div>';
+
+        const hasItems = items.length > 0;
+
+        return `
+            <div class="ps-notif-shade${notifShadeOpen ? ' ps-notif-open' : ''}" id="ps-notif-shade">
+                <div class="ps-notif-bg" data-act="close-shade"></div>
+                <div class="ps-notif-content">
+                    <div class="ps-notif-header">
+                        <span class="ps-notif-header-time">${timeStr}</span>
+                        <span class="ps-notif-header-date">${dateStr}</span>
+                        ${hasItems ? `<button class="ps-notif-clear" data-act="clear-notifs">Clear</button>` : ''}
+                    </div>
+                    <div class="ps-notif-list">
+                        ${itemHtml}
+                    </div>
+                    <div class="ps-notif-handle"><span></span></div>
+                </div>
+            </div>`;
+    }
+
     function render() {
         const panel = ensurePanel();
         // Stop call timer if leaving call view
@@ -1833,6 +2008,7 @@ function cleanThreads(threads) {
         }
         panel.innerHTML = `
             <div class="ps-phone-frame">
+                ${buildNotifShade()}
                 <div class="ps-statusbar">
                     <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">PhoneSocial</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
@@ -1914,6 +2090,76 @@ function cleanThreads(threads) {
                     hint.style.display = 'none';
                 }
             });
+        }
+
+        // Wire up notification shade pull-down gesture
+        const shade = panel.querySelector('#ps-notif-shade');
+        const shadeContent = shade ? shade.querySelector('.ps-notif-content') : null;
+        const shadeBg = shade ? shade.querySelector('.ps-notif-bg') : null;
+        if (shade && shadeContent) {
+            let sy = 0, pulling = false, startY = 0, shadeHeight = 0;
+
+            const onShadeStart = (e) => {
+                if (notifShadeOpen) return; // Only track when closed
+                const t = e.touches?.[0] || e;
+                // Only respond to touches near the top of the panel
+                if (t.clientY > 80) return;
+                sy = t.clientY;
+                startY = t.clientY;
+                pulling = true;
+                shadeHeight = shadeContent.offsetHeight || 280;
+                shade.style.transition = 'none';
+                shadeContent.style.transition = 'none';
+            };
+
+            const onShadeMove = (e) => {
+                if (!pulling) return;
+                const t = e.touches?.[0] || e;
+                const dy = t.clientY - sy;
+                if (dy < 0 && !notifShadeOpen) { pulling = false; return; }
+                const progress = Math.min(1, Math.max(0, (t.clientY - startY) / shadeHeight));
+                shade.style.transform = `translateY(${notifShadeOpen ? 0 : Math.round(-shadeHeight + dy)}px)`;
+                shade.style.opacity = Math.min(1, progress * 1.5);
+            };
+
+            const onShadeEnd = (e) => {
+                if (!pulling) return;
+                pulling = false;
+                shade.style.transition = 'transform 0.25s ease-out, opacity 0.25s ease-out';
+                shadeContent.style.transition = '';
+                const t = e.changedTouches?.[0] || e;
+                const dy = t.clientY - startY;
+                if (dy > shadeHeight * 0.3 && !notifShadeOpen) {
+                    // Open shade
+                    notifShadeOpen = true;
+                    shade.classList.add('ps-notif-open');
+                    shade.style.transform = '';
+                    shade.style.opacity = '';
+                } else if (dy < -30 && notifShadeOpen) {
+                    // Close shade
+                    notifShadeOpen = false;
+                    shade.classList.remove('ps-notif-open');
+                    shade.style.transform = '';
+                    shade.style.opacity = '';
+                } else {
+                    // Snap back
+                    shade.style.transform = '';
+                    shade.style.opacity = '';
+                }
+            };
+
+            if (shadeBg) {
+                shadeBg.addEventListener('click', () => {
+                    notifShadeOpen = false;
+                    shade.classList.remove('ps-notif-open');
+                    shade.style.transform = '';
+                    shade.style.opacity = '';
+                });
+            }
+
+            panel.addEventListener('touchstart', onShadeStart, { passive: true });
+            panel.addEventListener('touchmove', onShadeMove, { passive: true });
+            panel.addEventListener('touchend', onShadeEnd, { passive: true });
         }
 
         // Restore compose draft from module-level stash (survives view changes)
@@ -3006,6 +3252,12 @@ function viewAlbums() {
         }
         if (!el) return;
         const act = el.getAttribute('data-act');
+        // Auto-close notification shade when navigating away
+        if (notifShadeOpen && act !== 'close-shade' && act !== 'clear-notifs') {
+            notifShadeOpen = false;
+            const s = document.getElementById('ps-notif-shade');
+            if (s) { s.classList.remove('ps-notif-open'); s.style.transform = ''; s.style.opacity = ''; }
+        }
         switch (act) {
             case 'close':
                 togglePanel();
@@ -3025,6 +3277,33 @@ function viewAlbums() {
                 state.incomingBanner = null;
                 const b = document.querySelector('.ps-incoming-banner');
                 if (b) b.remove();
+                render();
+                return;
+
+            case 'close-shade':
+                notifShadeOpen = false;
+                const shadeEl = document.getElementById('ps-notif-shade');
+                if (shadeEl) {
+                    shadeEl.classList.remove('ps-notif-open');
+                    shadeEl.style.transform = '';
+                    shadeEl.style.opacity = '';
+                }
+                return;
+
+            case 'clear-notifs':
+                // Mark all unread SMS as seen
+                for (const [cid, thread] of Object.entries(state.threads)) {
+                    if (!Array.isArray(thread)) continue;
+                    for (const m of thread) {
+                        if (m.from === 'them' && !m.seen) m.seen = true;
+                    }
+                }
+                // Mark all voicemails as heard
+                if (Array.isArray(state.voicemails)) {
+                    for (const vm of state.voicemails) vm.heard = true;
+                }
+                notifShadeOpen = false;
+                saveMeta();
                 render();
                 return;
 
