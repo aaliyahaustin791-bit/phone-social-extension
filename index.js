@@ -4492,7 +4492,10 @@ function viewAlbums() {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
             const nameLower = contactName.toLowerCase();
-            const recent = ctx.chat.slice(-6).filter(m => m && !m.is_system);
+            // Check 15 messages (was 6) — in active multi-character scenes,
+            // an NPC can easily fall out of a 6-msg window while still
+            // being present in the scene. 15 catches the full scene window.
+            const recent = ctx.chat.slice(-15).filter(m => m && !m.is_system);
             for (const m of recent) {
                 const speaker = (m.name || '').toLowerCase();
                 if (speaker === nameLower) return true;
