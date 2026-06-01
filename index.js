@@ -4067,9 +4067,11 @@ function viewAlbums() {
                     .filter(msg => {
                         if (!msg || msg.is_system) return false;
                         const speaker = (msg.name || '').toLowerCase();
-                        const text = (msg.mes || msg.text || '').toLowerCase();
-                        // Include if the NPC is the speaker OR mentioned in the message
-                        return speaker === contactNameLower || text.includes(contactNameLower);
+                        // Include ONLY if the NPC is the speaker — they must have been
+                        // physically present in the scene. Messages that merely mention
+                        // the NPC's name should NOT be injected, or NPCs become omniscient
+                        // and learn about surprises/plans discussed in their absence.
+                        return speaker === contactNameLower;
                     })
                     .slice(-5)
                     .map(msg => {
@@ -4992,7 +4994,8 @@ MANDATORY RULES — NO EXCEPTIONS:
 - Scan every message individually. Do not skim. Characters mentioned once still count.
 - "memories": 1 to 5 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
 - Memories must be durable facts: promises, secrets, plans, betrayals, favors, relationship changes.
-- npcs array MUST NOT be empty unless the transcript genuinely has zero side characters.`;
+- npcs array MUST NOT be empty unless the transcript genuinely has zero side characters.
+- ANTI-OMNISCIENCE RULE: Do NOT create memories about things said ABOUT an NPC by other characters when the NPC wasn't there. If characters discuss plans to surprise Sarah, that is NOT a memory for Sarah — she wasn't present. Only create memories about what the NPC themselves said/did, or what was said directly TO them while they were present.`;
 
         const userPrompt = `Roleplay conversation transcript:\n\n${transcript}\n\nExtract ALL NPCs and relationship memories from this conversation. Do NOT skip anyone — find every side character.`;
 
