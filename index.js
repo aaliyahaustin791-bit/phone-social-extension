@@ -4514,7 +4514,11 @@ function viewAlbums() {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
             const nameLower = contactName.toLowerCase();
-            const recent = ctx.chat.slice(-40).filter(m => m && !m.is_system);
+            // NO is_system filter — in many chats, 80%+ of messages are marked
+            // system (world info, summaries, extension injections), leaving too
+            // few real messages to detect NPC presence. System messages don't have
+            // NPC names anyway, so checking them is harmless.
+            const recent = ctx.chat.slice(-80).filter(m => !!m);
             for (const m of recent) {
                 const speaker = (m.name || '').toLowerCase();
                 // Exact match only — "Corey + Jay" is a single character card,
