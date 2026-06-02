@@ -4430,6 +4430,13 @@ function viewAlbums() {
 
     async function simulateIncomingCall(contact) {
         if (state.activeCall) return; // Already on a call
+        // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.
+        // The scheduler checks this, but chat state can change between
+        // scheduling and execution. If they're in the room, abort.
+        if (isNpcPresent(contact.name)) {
+            console.log('[PhoneSocial] 🛑 simulateIncomingCall BLOCKED: ' + contact.name + ' is present in scene');
+            return;
+        }
         const personality = inferPersonality(contact);
         if (shouldDeclineCall(contact, personality)) {
             const activity = getCurrentActivity(contact);
@@ -4472,6 +4479,11 @@ function viewAlbums() {
 
     async function simulateProactiveText(contact, trigger) {
         if (!state.settings.autoReplies) return;
+        // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.
+        if (isNpcPresent(contact.name)) {
+            console.log('[PhoneSocial] 🛑 simulateProactiveText BLOCKED: ' + contact.name + ' is present in scene');
+            return;
+        }
         if (!state.threads[contact.id]) state.threads[contact.id] = [];
         const personality = inferPersonality(contact);
         // AI generation only — if it fails, skip (no scripted fallbacks)
