@@ -2024,7 +2024,7 @@ function cleanThreads(threads) {
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v4</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v6</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -4533,6 +4533,23 @@ function viewAlbums() {
         return false;
     }
 
+    // Checks whether an NPC has EVER spoken in the main chat (wide window).
+    // Used to gate random proactivity — NPCs who've never appeared in-scene
+    // shouldn't send unprompted texts (they'd have no reason to).
+    function hasAppearedInChat(contactName) {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat) return false;
+            const nameLower = contactName.toLowerCase();
+            const window = ctx.chat.slice(-200).filter(m => !!m);
+            for (const m of window) {
+                const speaker = (m.name || '').toLowerCase();
+                if (speaker === nameLower) return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
     // Scans recent main chat for story beats that warrant a proactive message.
     // Returns {type, intensity} or null if nothing significant happened.
     // STRICT RULES:
@@ -4589,8 +4606,6 @@ function viewAlbums() {
                     if (isExit) break;
                 }
                 if (isExit) return { type: 'scene_exit', intensity: 'high' };
-                // Even without exit words, if NPC has been gone for 8+ messages, treat as soft exit
-                if (msgsSinceNpc >= 8) return { type: 'scene_exit', intensity: 'medium' };
             }
 
             // ── CONFLICT: NPC was directly involved in an argument ──
@@ -4712,6 +4727,7 @@ function viewAlbums() {
         const eligible = contacts.filter(c => {
             if (!c.id || c.source === 'st-character' || c.source === 'st-group') return false;
             if (isNpcPresent(c.name)) return false; // Skip present NPCs
+            if (!hasAppearedInChat(c.name)) return false; // Never in-scene — no reason to reach out
             if (hasRecentInteraction(c)) return false; // Just texted — don't harass
             const activity = getCurrentActivity(c);
             if (activity && activity.noProactive) return false;
@@ -5086,12 +5102,28 @@ MANDATORY RULES — NO EXCEPTIONS:
                 console.log(`[PhoneSocial] scan: created NPC "${name}"`);
             }
 
+            // ── Build set of speakers from the scanned transcript ──
+            // Hard filter: only accept memories about NPCs who actually SPOKE
+            // in the scanned window. Reject memories about NPCs who were only
+            // mentioned — those are things said behind their back (omniscience).
+            const transcriptSpeakers = new Set();
+            const speakerRe = /^([^:]+):/gm;
+            let m2;
+            while ((m2 = speakerRe.exec(transcript)) !== null) {
+                transcriptSpeakers.add(m2[1].trim().toLowerCase());
+            }
+
             // Add memories to existing contacts
             for (const m of mems) {
                 const contactName = (m.name || '').trim();
                 if (!contactName) continue;
                 const contact = contacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
                 if (!contact) continue;
+                // Hard omniscience filter: reject if NPC wasn't a speaker
+                if (!transcriptSpeakers.has(contactName.toLowerCase())) {
+                    console.log(`[PhoneSocial] scan: REJECTED memory for "${contactName}" — not a speaker in transcript (said behind their back)`);
+                    continue;
+                }
                 const memText = (m.text || '').trim();
                 if (!memText || memText.length < 15) continue;
                 if (!contact.memories) contact.memories = [];
