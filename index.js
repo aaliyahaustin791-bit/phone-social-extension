@@ -2014,7 +2014,7 @@ function cleanThreads(threads) {
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">PhoneSocial</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v3 (debug: isNpcPresent+log)</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -4492,14 +4492,17 @@ function viewAlbums() {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
             const nameLower = contactName.toLowerCase();
-            // Check 15 messages (was 6) — in active multi-character scenes,
-            // an NPC can easily fall out of a 6-msg window while still
-            // being present in the scene. 15 catches the full scene window.
-            const recent = ctx.chat.slice(-15).filter(m => m && !m.is_system);
+            // Check 25 messages — wide enough for any multi-character scene.
+            // In fast-paced RP with 3+ characters, even 15 can be too tight.
+            const recent = ctx.chat.slice(-25).filter(m => m && !m.is_system);
             for (const m of recent) {
                 const speaker = (m.name || '').toLowerCase();
-                if (speaker === nameLower) return true;
+                if (speaker === nameLower) {
+                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs → BLOCKING proactive');
+                    return true;
+                }
             }
+            console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' NOT in recent ' + recent.length + ' msgs, speakers: ' + recent.map(m => (m.name || '?')).join(', '));
         } catch (_) {}
         return false;
     }
@@ -4624,6 +4627,13 @@ function viewAlbums() {
     function checkProactiveNPCs() {
         const contacts = state.contacts;
         if (!contacts.length || !state.settings.autoReplies) return;
+
+        // Debug: log which NPCs are being skipped
+        console.log('[PhoneSocial] 🔍 proactive check: ' + contacts.length + ' contacts, autoReplies=' + state.settings.autoReplies);
+        const skippedPresent = contacts.filter(c => isNpcPresent(c.name));
+        if (skippedPresent.length) {
+            console.log('[PhoneSocial] 🚫 skipping ' + skippedPresent.length + ' present NPCs: ' + skippedPresent.map(c => c.name).join(', '));
+        }
 
         // Helper: has this NPC texted the user recently? Skip if so.
         function hasRecentInteraction(c) {
