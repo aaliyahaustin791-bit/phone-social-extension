@@ -5647,6 +5647,21 @@ Rules:
             continuity = '\n\nRecent continuity:\nThis character had the following schedule last week. Use it to maintain consistency:\n' +
                 prevBlocks.join('\n') + '\nIf recent events changed their job, school, health, relationships, or obligations, reflect those changes. Otherwise preserve their established routine.';
         }
+        // ── Scan chat for NPC's actual behavior patterns ──
+        let storyContext = '';
+        if (ctx?.chat) {
+            const nameLower = charName.toLowerCase();
+            const npcMsgs = ctx.chat
+                .filter(m => m && !m.is_system && (m.name || '').toLowerCase() === nameLower)
+                .slice(-20)
+                .map(m => (m.mes || m.text || '').trim().slice(0, 200))
+                .filter(Boolean);
+            if (npcMsgs.length) {
+                storyContext = '\n\nStory evidence — actual behaviors observed in conversation:\n' +
+                    npcMsgs.map((txt, i) => `${i + 1}. ${txt}`).join('\n') +
+                    '\n\nUse these real behaviors to infer their habits: when they wake up, go to work, have free time, their energy levels, nighttime routines. The schedule must match what the story shows about this character.';
+            }
+        }
         const systemPrompt = [
             'You are a schedule generator. Create a realistic weekly schedule for a character based on their personality and description.',
             '',
@@ -5654,6 +5669,7 @@ Rules:
             'Description: ' + (charDesc || '(no description available)'),
             'Personality: ' + (charPersonality || '(no personality info)'),
             continuity,
+            storyContext,
             '',
             'Generate a schedule for each day of the week (Monday through Sunday).',
             'Each day should have time blocks covering the full 24 hours.',
