@@ -113,17 +113,15 @@
                 if (part.length > 1) set.add(part);
             }
         }
-        // Block ALL loaded ST character cards — these are not NPCs,
-        // they're characters the user is actively roleplaying with.
-        // They should never become PhoneSocial contacts.
+        // Block the FULL names of loaded ST character cards — these are
+        // roleplay characters, not NPCs. But do NOT block individual name
+        // parts (e.g. "Corey" from "Corey + Jay") — those may appear as
+        // separate speakers in chat and should be harvestable.
         if (ctx.characters) {
             for (const ch of ctx.characters) {
                 if (!ch?.name) continue;
                 const n = ch.name.trim().toLowerCase();
                 if (n) set.add(n);
-                for (const part of n.split(/[\s_\-]+/)) {
-                    if (part.length > 1) set.add(part);
-                }
             }
         }
         return set;
@@ -5014,8 +5012,7 @@ Return ONLY valid JSON (no markdown, no extra text):
 }
 
 MANDATORY RULES — NO EXCEPTIONS:
-- "npcs": Find side characters who actually SPEAK in the transcript. Characters who are only mentioned by others (never speak themselves) do NOT count — they are not NPCs, they are background lore. Only include characters who have at least one line of dialogue.
-- If no side characters speak in this transcript, npcs MUST be [].
+- "npcs": Find EVERY side character — those who speak AND those mentioned by name. Parents, distant relatives, off-screen characters who matter to the story should be included even if they don't appear in person.
 - "memories": 1 to 5 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
 - Memories must be durable facts: promises, secrets, plans, betrayals, favors, relationship changes.
 - ANTI-OMNISCIENCE RULE: Do NOT create memories about things said ABOUT an NPC by other characters when the NPC wasn't there. If characters discuss plans to surprise Sarah, that is NOT a memory for Sarah — she wasn't present. Only create memories about what the NPC themselves said/did, or what was said directly TO them while they were present.`;
