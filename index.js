@@ -2024,7 +2024,7 @@ function cleanThreads(threads) {
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v3 (debug: isNpcPresent+log)</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v4</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
