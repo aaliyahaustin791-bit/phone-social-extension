@@ -4492,13 +4492,15 @@ function viewAlbums() {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
             const nameLower = contactName.toLowerCase();
-            // Check 25 messages — wide enough for any multi-character scene.
-            // In fast-paced RP with 3+ characters, even 15 can be too tight.
-            const recent = ctx.chat.slice(-25).filter(m => m && !m.is_system);
+            // 40 messages — in group chats, many are system messages that get filtered.
+            // We need a deep window to catch NPCs who spoke recently.
+            const recent = ctx.chat.slice(-40).filter(m => m && !m.is_system);
             for (const m of recent) {
-                const speaker = (m.name || '').toLowerCase();
-                if (speaker === nameLower) {
-                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs → BLOCKING proactive');
+                const rawSpeaker = (m.name || '').toLowerCase();
+                // ST group chats combine names: "Corey + Jay". Split and check each part.
+                const speakers = rawSpeaker.split(/\s*[+,&]\s*|\s+and\s+/g);
+                if (speakers.some(s => s === nameLower)) {
+                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs (speaker: ' + rawSpeaker + ') → BLOCKING proactive');
                     return true;
                 }
             }
