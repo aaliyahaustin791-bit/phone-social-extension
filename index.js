@@ -5546,6 +5546,84 @@ Rules:
         return d;
     }
 
+    // Returns the in-chat time from the last message's send_date, falling
+    // back to real system time. Prevents schedules from showing "lunch break"
+    // when the story is at midnight.
+    function getChatTime() {
+        try {
+            const ctx = getCtx();
+            // ── Priority 1: RPG Companion in-game time ──
+            const rpgData = ctx?.chatMetadata?.rpg_companion;
+            if (rpgData) {
+                const infoBoxRaw = rpgData.committedTrackerData?.infoBox || rpgData.lastGeneratedData?.infoBox;
+                if (infoBoxRaw) {
+                    const parsed = parseRpgTime(infoBoxRaw);
+                    if (parsed) return parsed;
+                }
+            }
+            // ── Priority 2: Last message send_date ──
+            if (ctx?.chat && Array.isArray(ctx.chat) && ctx.chat.length) {
+                const last = ctx.chat[ctx.chat.length - 1];
+                if (last?.send_date) {
+                    const ts = typeof last.send_date === 'number' ? last.send_date * 1000 : Date.parse(last.send_date);
+                    if (!isNaN(ts)) return new Date(ts);
+                }
+            }
+        } catch (_) {}
+        // ── Fallback: real system time ──
+        return new Date();
+    }
+
+    // Parse RPG Companion's infoBox time format into a Date.
+    // Handles both JSON {time:{start,end},date,weekday,month,year} and text "Time: HH:MM → HH:MM" formats.
+    function parseRpgTime(raw) {
+        try {
+            const str = String(raw).trim();
+            // Try JSON first
+            if (str.startsWith('{')) {
+                const obj = JSON.parse(str);
+                const time = obj.time?.end || obj.time?.start || obj.time;
+                const timeStr = typeof time === 'string' ? time : (time?.end || time?.start || '');
+                const dateStr = obj.date || '';
+                const monthStr = obj.month || '';
+                const yearStr = obj.year || '';
+                return buildDateFromParts(timeStr, dateStr, monthStr, yearStr);
+            }
+            // Try text format: "Time: 14:30 → 15:00"
+            const timeMatch = str.match(/Time:\s*(\d{1,2}:\d{2})(?:\s*[→-]\s*(\d{1,2}:\d{2}))?/i);
+            if (timeMatch) {
+                const endTime = timeMatch[2] || timeMatch[1];
+                const dateMatch = str.match(/Date:\s*(.+)/i);
+                return buildDateFromParts(endTime, dateMatch?.[1] || '', '', '');
+            }
+        } catch (_) {}
+        return null;
+    }
+
+    function buildDateFromParts(timeStr, dateStr, monthStr, yearStr) {
+        const timeMatch = (timeStr || '').match(/(\d{1,2}):(\d{2})/);
+        if (!timeMatch) return null;
+        const hours = parseInt(timeMatch[1]);
+        const minutes = parseInt(timeMatch[2]);
+        const now = new Date();
+        now.setHours(hours, minutes, 0, 0);
+        // If we have a date, try to set day/month/year
+        if (dateStr) {
+            const dayNum = parseInt(dateStr);
+            if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) now.setDate(dayNum);
+        }
+        if (monthStr) {
+            const months = { january:0,february:1,march:2,april:3,may:4,june:5,july:6,august:7,september:8,october:9,november:10,december:11 };
+            const m = months[monthStr.toLowerCase()] ?? (parseInt(monthStr) - 1);
+            if (!isNaN(m) && m >= 0) now.setMonth(m);
+        }
+        if (yearStr) {
+            const y = parseInt(yearStr);
+            if (!isNaN(y) && y > 0) now.setFullYear(y);
+        }
+        return now;
+    }
+
     function inferStatusFromActivity(activity) {
         const lower = (activity || '').toLowerCase();
         for (const [kw, st] of Object.entries(STATUS_KEYWORDS)) {
@@ -5556,7 +5634,7 @@ Rules:
 
     function getCurrentScheduleStatus(schedule, now) {
         if (!schedule || !schedule.days) return null;
-        const d = now ? new Date(now) : new Date();
+        const d = now ? new Date(now) : getChatTime();
         const dayName = DAYS[(d.getDay() + 6) % 7];
         const daySchedule = schedule.days[dayName];
         if (!Array.isArray(daySchedule) || !daySchedule.length) return null;
@@ -5752,7 +5830,8 @@ Rules:
             '<span style="font-size:12px;color:#8e8e93">— ' + escape(nowActivity) + '</span></div>' +
             '<div style="font-size:11px;color:#8e8e93">Talkativeness: ' + (s.talkativeness || 50) + '/100 • Reaches out after ' + (s.inactivityThresholdMinutes || 120) + 'min</div></div>';
         // 7-day compact grid
-        const todayIdx = (new Date().getDay() + 6) % 7;
+        const chatNow = getChatTime();
+        const todayIdx = (chatNow.getDay() + 6) % 7;
         html += '<div style="display:flex;flex-direction:column;gap:4px;font-size:10px;max-height:200px;overflow-y:auto">';
         for (let i = 0; i < 7; i++) {
             const day = DAYS[i];
