@@ -94,7 +94,6 @@
         const name2 = (ctx.name2 || ctx.name || '').trim().toLowerCase();
         if (name2) {
             set.add(name2);
-            // Also add word-split parts for matching
             for (const part of name2.split(/[\s_\-]+/)) {
                 if (part.length > 1) set.add(part);
             }
@@ -112,6 +111,19 @@
             set.add(personaName);
             for (const part of personaName.split(/[\s_\-]+/)) {
                 if (part.length > 1) set.add(part);
+            }
+        }
+        // Block ALL loaded ST character cards — these are not NPCs,
+        // they're characters the user is actively roleplaying with.
+        // They should never become PhoneSocial contacts.
+        if (ctx.characters) {
+            for (const ch of ctx.characters) {
+                if (!ch?.name) continue;
+                const n = ch.name.trim().toLowerCase();
+                if (n) set.add(n);
+                for (const part of n.split(/[\s_\-]+/)) {
+                    if (part.length > 1) set.add(part);
+                }
             }
         }
         return set;
@@ -4492,15 +4504,13 @@ function viewAlbums() {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
             const nameLower = contactName.toLowerCase();
-            // 40 messages — in group chats, many are system messages that get filtered.
-            // We need a deep window to catch NPCs who spoke recently.
             const recent = ctx.chat.slice(-40).filter(m => m && !m.is_system);
             for (const m of recent) {
-                const rawSpeaker = (m.name || '').toLowerCase();
-                // ST group chats combine names: "Corey + Jay". Split and check each part.
-                const speakers = rawSpeaker.split(/\s*[+,&]\s*|\s+and\s+/g);
-                if (speakers.some(s => s === nameLower)) {
-                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs (speaker: ' + rawSpeaker + ') → BLOCKING proactive');
+                const speaker = (m.name || '').toLowerCase();
+                // Exact match only — "Corey + Jay" is a single character card,
+                // NOT two separate speakers. Do NOT split on +/,/&.
+                if (speaker === nameLower) {
+                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs → BLOCKING proactive');
                     return true;
                 }
             }
@@ -5004,12 +5014,10 @@ Return ONLY valid JSON (no markdown, no extra text):
 }
 
 MANDATORY RULES — NO EXCEPTIONS:
-- "npcs": Find EVERY side character. Every single person who speaks, is spoken to, or is mentioned by name. No limit. 2 is NOT enough unless this is a tiny transcript.
-- MINIMUM: If the transcript has 20+ messages, you MUST find at least 4 NPCs. If you return fewer than 4 with 20+ messages, you FAILED.
-- Scan every message individually. Do not skim. Characters mentioned once still count.
+- "npcs": Find side characters who actually SPEAK in the transcript. Characters who are only mentioned by others (never speak themselves) do NOT count — they are not NPCs, they are background lore. Only include characters who have at least one line of dialogue.
+- If no side characters speak in this transcript, npcs MUST be [].
 - "memories": 1 to 5 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
 - Memories must be durable facts: promises, secrets, plans, betrayals, favors, relationship changes.
-- npcs array MUST NOT be empty unless the transcript genuinely has zero side characters.
 - ANTI-OMNISCIENCE RULE: Do NOT create memories about things said ABOUT an NPC by other characters when the NPC wasn't there. If characters discuss plans to surprise Sarah, that is NOT a memory for Sarah — she wasn't present. Only create memories about what the NPC themselves said/did, or what was said directly TO them while they were present.`;
 
         const userPrompt = `Roleplay conversation transcript:\n\n${transcript}\n\nExtract ALL NPCs and relationship memories from this conversation. Do NOT skip anyone — find every side character.`;
