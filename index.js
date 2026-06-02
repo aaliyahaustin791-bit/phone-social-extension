@@ -5834,19 +5834,47 @@ Rules:
             continuity = '\n\nRecent continuity:\nThis character had the following schedule last week. Use it to maintain consistency:\n' +
                 prevBlocks.join('\n') + '\nIf recent events changed their job, school, health, relationships, or obligations, reflect those changes. Otherwise preserve their established routine.';
         }
-        // ── Scan chat for NPC's actual behavior patterns ──
+        // ── Build rich story evidence: NPC's own lines + surrounding scene context ──
         let storyContext = '';
         if (ctx?.chat) {
             const nameLower = charName.toLowerCase();
-            const npcMsgs = ctx.chat
-                .filter(m => m && !m.is_system && (m.name || '').toLowerCase() === nameLower)
-                .slice(-20)
-                .map(m => (m.mes || m.text || '').trim().slice(0, 200))
-                .filter(Boolean);
-            if (npcMsgs.length) {
-                storyContext = '\n\nStory evidence — actual behaviors observed in conversation:\n' +
-                    npcMsgs.map((txt, i) => `${i + 1}. ${txt}`).join('\n') +
-                    '\n\nUse these real behaviors to infer their habits: when they wake up, go to work, have free time, their energy levels, nighttime routines. The schedule must match what the story shows about this character.';
+            const recentMsgs = ctx.chat.slice(-60).filter(m => m && !m.is_system);
+            // Collect NPC's own messages AND the lines immediately around them for scene context
+            const sceneSnapshots = [];
+            for (let i = 0; i < recentMsgs.length; i++) {
+                const m = recentMsgs[i];
+                const speaker = (m.name || '').toLowerCase();
+                if (speaker === nameLower) {
+                    const before = recentMsgs[i - 1];
+                    const after = recentMsgs[i + 1];
+                    let snapshot = (m.mes || m.text || '').trim().slice(0, 250);
+                    if (before) {
+                        const ctxLine = (before.mes || before.text || '').trim().slice(0, 150);
+                        snapshot = '[' + (before.name || 'Someone') + ': ' + ctxLine + ']\n' + charName + ': ' + snapshot;
+                    }
+                    sceneSnapshots.push(snapshot);
+                }
+            }
+            // Collect NPC memories as additional evidence
+            let memoryContext = '';
+            if (Array.isArray(contact.memories) && contact.memories.length) {
+                const recentMems = contact.memories.slice(-10);
+                memoryContext = '\n\nKnown facts about ' + charName + ':\n' +
+                    recentMems.map(m => '- ' + (m.text || '')).join('\n');
+            }
+            if (sceneSnapshots.length) {
+                storyContext = '\n\nScene evidence — recent appearances in the story (includes surrounding context):\n' +
+                    sceneSnapshots.slice(-10).map((txt, i) => `--- Scene ${i + 1} ---\n${txt}`).join('\n\n') +
+                    memoryContext +
+                    '\n\n⛔ CRITICAL INSTRUCTIONS FOR SCHEDULE CREATION ⛔\n' +
+                    '1. BUILD A COMPLETE WEEKLY LIFE. This character has their OWN independent life, routines, job, hobbies, and responsibilities. They are NOT always with the user.\n' +
+                    '2. Chat evidence is ANCHOR material — if the character mentions working night shifts, lock those in. But fill ALL 24 hours of every day, not just what was observed.\n' +
+                    '3. Use SPECIFIC activities tailored to this character. Never use generic "work" or "sleeping" alone — use "patrolling the east ward", "barista shift at The Daily Grind", "studying for the bar exam", "feeding the horses at dawn".\n' +
+                    '4. INFER from personality, backstory, and the character card. A musician practices. A student has classes. A parent has childcare. A werewolf transforms at night. Fill in what the chat doesn\'t show.\n' +
+                    '5. Make it BELIEVABLE — the schedule should feel like a real person\'s weekly routine, with variety across days, realistic downtime, and activities that match who they are.';
+            } else if (memoryContext) {
+                storyContext = memoryContext +
+                    '\n\nBuild a complete weekly schedule for this character based on their personality and known facts. They have their own independent life.';
             }
         }
         const systemPrompt = [
@@ -5858,9 +5886,17 @@ Rules:
             continuity,
             storyContext,
             '',
-            'Generate a schedule for each day of the week (Monday through Sunday).',
-            'Each day should have time blocks covering the full 24 hours.',
-            'The schedule should be realistic and consistent with the character\'s lifestyle.',
+            '⛔ CORE PRINCIPLE: This character has their OWN life. They exist independently of the user.',
+            'They have a job, hobbies, routines, friends, and responsibilities that continue even when not shown in the chat.',
+            'The schedule must reflect THEIR life — not just when they interact with the user.',
+            '',
+            'Generate a complete schedule for each day (Monday through Sunday). Every day must cover the full 24 hours.',
+            'Use SPECIFIC, CHARACTER-TAILORED activities. Examples:',
+            '- "morning patrol of the east ward" (not just "work")',
+            '- "barista shift at The Daily Grind" (not just "work")',
+            '- "studying for the bar exam at the library" (not just "studying")',
+            '- "feeding the horses and mucking stalls" (not just "chores")',
+            '- "deep sleep — dead to the world" (not just "sleeping")',
             '',
             'Each time block must include a "status" field:',
             '- "online": awake and available (free time, socializing, casual activities)',
