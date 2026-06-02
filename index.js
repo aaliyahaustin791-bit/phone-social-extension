@@ -51,6 +51,8 @@
             voicemails: [],    // [{contactId, text, ts, heard: false}]
             dialTab: 'keypad', // 'keypad' | 'recents'
             incomingBanner: null, // {contactId, name, text, ts} — transient SMS popup
+            lastUserMessageAt: 0,  // timestamp of last user message (for inactivity tracking)
+            userDnd: false,        // do-not-disturb: suppress all autonomous messages
         };
     }
 
@@ -190,6 +192,8 @@ function cleanThreads(threads) {
             meta.browserUrl = state.browserUrl;
             meta.chirpPosts = chirpClean;
             meta.chirpLastRefresh = state.chirpLastRefresh || 0;
+            meta.lastUserMessageAt = state.lastUserMessageAt || 0;
+            meta.userDnd = state.userDnd || false;
             try { ctx?.saveMetadata?.(); } catch (_e1) {
                 setTimeout(() => { try { ctx?.saveMetadata?.(); } catch (_e2) {} }, 200);
             }
@@ -214,6 +218,8 @@ function cleanThreads(threads) {
             browserUrl: state.browserUrl,
             chirpPosts: chirpClean,
             chirpLastRefresh: state.chirpLastRefresh || 0,
+            lastUserMessageAt: state.lastUserMessageAt || 0,
+            userDnd: state.userDnd || false,
         };
         // ST extensionSettings path
         if (ctx?.extensionSettings) {
@@ -295,6 +301,8 @@ function cleanThreads(threads) {
                         }));
                         state.chirpLastRefresh = backup.chirpLastRefresh || 0;
                     }
+                    if (typeof backup.lastUserMessageAt === 'number') state.lastUserMessageAt = backup.lastUserMessageAt;
+                    if (typeof backup.userDnd === 'boolean') state.userDnd = backup.userDnd;
                     loadedFromLocal = true;
                 }
             }
@@ -335,6 +343,8 @@ function cleanThreads(threads) {
                 }));
                 state.chirpLastRefresh = meta.chirpLastRefresh || 0;
             }
+            if (typeof meta.lastUserMessageAt === 'number') state.lastUserMessageAt = meta.lastUserMessageAt;
+            if (typeof meta.userDnd === 'boolean') state.userDnd = meta.userDnd;
         }
         // If still no contacts, try extensionSettings backup (skip localStorage — already tried)
         if (!loadedFromLocal && (!state.contacts.length || !Object.keys(state.threads).length)) {
@@ -2030,7 +2040,7 @@ function cleanThreads(threads) {
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v7</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v8</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -3104,9 +3114,15 @@ function viewDial() {
                 label: '🔔 Toastr popups',
                 desc: 'Show on-screen notifications for incoming SMS and calls.',
             },
+            {
+                key: 'userDnd',
+                label: '🚫 Do Not Disturb',
+                desc: 'Suppress ALL autonomous NPC texts and calls. NPCs will only reply when you message them first.',
+            },
         ];
         const toggles = behaviorEntries.map(item => {
-            const value = !!state.settings[item.key];
+            // userDnd lives on state directly, not settings
+            const value = item.key === 'userDnd' ? !!state.userDnd : !!state.settings[item.key];
             return `
                 <div class="ps-setting-row">
                     <div>
@@ -3692,8 +3708,13 @@ function viewAlbums() {
             case 'toggle-setting': {
                 const toggleKey = el.getAttribute('data-key');
                 if (!toggleKey) return;
-                const current = !!state.settings[toggleKey];
-                state.settings[toggleKey] = !current;
+                // userDnd lives on state directly, not settings
+                if (toggleKey === 'userDnd') {
+                    state.userDnd = !state.userDnd;
+                } else {
+                    const current = !!state.settings[toggleKey];
+                    state.settings[toggleKey] = !current;
+                }
                 if (toggleKey === 'autoHarvest' && state.settings[toggleKey]) {
                     harvestNPCs(true);
                 }
@@ -4682,6 +4703,53 @@ function viewAlbums() {
         return null;
     }
 
+    // ─── Schedule-driven eligibility (Marinara-style autonomous gating) ───
+    // Returns null if contact has no schedule (fallback to legacy).
+    // Returns {eligible, reason?, priority?, status?, activity?, talkativeness?} otherwise.
+    function isEligibleBySchedule(c) {
+        if (!c.schedule || !c.schedule.days || !Object.keys(c.schedule.days).length) return null;
+        const s = c.schedule;
+        const now = getCurrentScheduleStatus(s);
+        if (!now) return null;
+        const status = now.status;
+        const talkativeness = s.talkativeness || 50;
+        const thresholdMs = (s.inactivityThresholdMinutes || 120) * 60000;
+
+        // ── Offline → never reach out ──
+        if (status === 'offline') return { eligible: false, reason: 'offline', status, talkativeness };
+
+        // ── Need user activity to measure against ──
+        if (!state.lastUserMessageAt) return { eligible: false, reason: 'no_user_msgs', status, talkativeness };
+        const elapsed = Date.now() - state.lastUserMessageAt;
+
+        // ── Status multipliers ──
+        let effectiveThreshold = thresholdMs;
+        if (status === 'dnd') effectiveThreshold *= 3;   // Working — wait 3x longer
+        if (status === 'idle') effectiveThreshold *= 1.5; // Semi-available
+
+        // ── Follow-up cap & escalating cooldown ──
+        const MAX_FOLLOWUPS = 3;
+        let am = c._autonomousMsgs;
+        if (!am) { am = { count: 0, lastSentAt: 0 }; c._autonomousMsgs = am; }
+        if (am.count >= MAX_FOLLOWUPS) return { eligible: false, reason: 'followup_cap', status, talkativeness, priority: 0 };
+
+        // Escalating cooldown based on follow-up count
+        const followupMultiplier = am.count === 0 ? 1 : am.count === 1 ? 2 : 4;
+        const followupThreshold = effectiveThreshold * followupMultiplier;
+        const followupElapsed = (am.lastSentAt || 0) ? Date.now() - am.lastSentAt : Infinity;
+        if (followupElapsed < followupThreshold) return { eligible: false, reason: 'followup_cooldown', status, talkativeness, priority: 0 };
+
+        // ── Base threshold check ──
+        if (elapsed < effectiveThreshold) return { eligible: false, reason: 'below_threshold', status, talkativeness, priority: 0 };
+
+        // ── Priority scoring ──
+        let priority = talkativeness;
+        if (status === 'online') priority += 20;
+        priority -= am.count * 10;
+
+        return { eligible: true, status, talkativeness, priority, activity: now.activity };
+    }
+
     let proactiveInterval = null;
     function startProactiveCycle() {
         stopProactiveCycle();
@@ -4697,6 +4765,11 @@ function viewAlbums() {
     function checkProactiveNPCs() {
         const contacts = state.contacts;
         if (!contacts.length || !state.settings.autoReplies) return;
+        // ── DND guard: suppress ALL autonomous messages ──
+        if (state.userDnd) {
+            console.log('[PhoneSocial] 🔇 DND active — skipping proactive check');
+            return;
+        }
 
         // Debug: log which NPCs are being skipped
         console.log('[PhoneSocial] 🔍 proactive check: ' + contacts.length + ' contacts, autoReplies=' + state.settings.autoReplies);
@@ -4709,10 +4782,8 @@ function viewAlbums() {
         function hasRecentInteraction(c) {
             const thread = state.threads[c.id];
             if (!Array.isArray(thread) || !thread.length) return false;
-            // Check last message — if NPC sent it within 10 min, skip
             const last = thread[thread.length - 1];
             if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 600000) return true;
-            // Also check if user sent a message in the last 2 min (NPC probably about to reply)
             if (last.from === 'me' && (Date.now() - (last.ts || 0)) < 120000) return true;
             return false;
         }
@@ -4721,8 +4792,8 @@ function viewAlbums() {
         const triggered = [];
         for (const c of contacts) {
             if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
-            if (isNpcPresent(c.name)) continue; // NPC is in the room — don't text them
-            if (hasRecentInteraction(c)) continue; // Just texted — don't harass
+            if (isNpcPresent(c.name)) continue;
+            if (hasRecentInteraction(c)) continue;
             const trigger = detectStoryTrigger(c.name);
             if (trigger) {
                 triggered.push({ contact: c, trigger });
@@ -4736,7 +4807,6 @@ function viewAlbums() {
                 (intensityRank[b.trigger.intensity] || 0) - (intensityRank[a.trigger.intensity] || 0)
             );
             const winner = triggered[0];
-            // Cooldown check for triggered — 2 min to prevent spam
             const last = winner.contact._lastProactiveTime || 0;
             if (Date.now() - last >= 120000) {
                 winner.contact._lastProactiveTime = Date.now();
@@ -4749,35 +4819,74 @@ function viewAlbums() {
                     simulateProactiveText(winner.contact, winner.trigger);
                 }
             }
-            return; // Don't also do random proactivity this cycle
+            return;
         }
 
-        // Phase 3 — random proactivity (only when no story triggers found, reduced frequency)
-        const eligible = contacts.filter(c => {
-            if (!c.id || c.source === 'st-character' || c.source === 'st-group') return false;
-            if (isNpcPresent(c.name)) return false; // Skip present NPCs
-            if (!hasAppearedInChat(c.name)) return false; // Never in-scene — no reason to reach out
-            if (hasRecentInteraction(c)) return false; // Just texted — don't harass
-            const activity = getCurrentActivity(c);
-            if (activity && activity.noProactive) return false;
-            const personality = inferPersonality(c);
-            const cooldownMs = Math.max(300000, 900000 - personality.initiative * 60000); // 5-15 min
-            const last = c._lastProactiveTime || 0;
-            if (Date.now() - last < cooldownMs) return false;
-            return Math.random() < (personality.initiative / 30); // Lower random rate
-        });
-        if (!eligible.length) return;
-        eligible.sort((a, b) => inferPersonality(b).initiative - inferPersonality(a).initiative);
-        const chosen = eligible[0];
-        chosen._lastProactiveTime = Date.now();
-        const personality = inferPersonality(chosen);
-        const shouldCall = personality.prefersCall || (personality.initiative >= 5 && Math.random() < 0.35);
-        const activityLabel = getActivityLabel(chosen);
-        console.log('[PhoneSocial] random proactive: ' + chosen.name + ' initiates ' + (shouldCall ? 'call' : 'text') + ' (initiative=' + personality.initiative + (activityLabel ? ', ' + activityLabel : '') + ')');
-        if (shouldCall) {
-            simulateIncomingCall(chosen);
-        } else {
-            simulateProactiveText(chosen, null); // No trigger
+        // Phase 3 — schedule-driven autonomous messaging (Marinara-style)
+        const scheduleCandidates = [];
+        const legacyCandidates = [];
+        for (const c of contacts) {
+            if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
+            if (isNpcPresent(c.name)) continue;
+            if (!hasAppearedInChat(c.name)) continue;
+            if (hasRecentInteraction(c)) continue;
+            const eligibility = isEligibleBySchedule(c);
+            if (eligibility) {
+                if (!eligibility.eligible) {
+                    if (eligibility.reason === 'offline' || eligibility.reason === 'no_user_msgs') {
+                        continue; // Silent skip
+                    }
+                    continue;
+                }
+                scheduleCandidates.push({ contact: c, eligibility });
+            } else {
+                // No schedule — fall back to legacy personality-based
+                const activity = getCurrentActivity(c);
+                if (activity && activity.noProactive) continue;
+                const personality = inferPersonality(c);
+                const cooldownMs = Math.max(300000, 900000 - personality.initiative * 60000);
+                const last = c._lastProactiveTime || 0;
+                if (Date.now() - last < cooldownMs) continue;
+                if (Math.random() < (personality.initiative / 30)) {
+                    legacyCandidates.push({ contact: c, personality });
+                }
+            }
+        }
+
+        // Prefer schedule-driven, fall back to legacy
+        if (scheduleCandidates.length) {
+            scheduleCandidates.sort((a, b) => (b.eligibility.priority || 0) - (a.eligibility.priority || 0));
+            const winner = scheduleCandidates[0];
+            const e = winner.eligibility;
+            winner.contact._lastProactiveTime = Date.now();
+            // Track follow-up count
+            if (!winner.contact._autonomousMsgs) winner.contact._autonomousMsgs = { count: 0, lastSentAt: 0 };
+            winner.contact._autonomousMsgs.count++;
+            winner.contact._autonomousMsgs.lastSentAt = Date.now();
+            const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
+            const personality = inferPersonality(winner.contact);
+            const shouldCall = personality.prefersCall || (e.talkativeness >= 70 && Math.random() < 0.3);
+            console.log('[PhoneSocial] schedule-driven: ' + winner.contact.name + ' ' + (statusEmoji[e.status] || '') + e.status +
+                ' talk=' + e.talkativeness + ' priority=' + e.priority +
+                ' followup=' + winner.contact._autonomousMsgs.count + '/3 → ' + (shouldCall ? 'call' : 'text'));
+            if (shouldCall) {
+                simulateIncomingCall(winner.contact);
+            } else {
+                simulateProactiveText(winner.contact, null);
+            }
+        } else if (legacyCandidates.length) {
+            legacyCandidates.sort((a, b) => b.personality.initiative - a.personality.initiative);
+            const winner = legacyCandidates[0];
+            winner.contact._lastProactiveTime = Date.now();
+            const shouldCall = winner.personality.prefersCall || (winner.personality.initiative >= 5 && Math.random() < 0.35);
+            const activityLabel = getActivityLabel(winner.contact);
+            console.log('[PhoneSocial] legacy proactive: ' + winner.contact.name + ' initiates ' + (shouldCall ? 'call' : 'text') +
+                ' (initiative=' + winner.personality.initiative + (activityLabel ? ', ' + activityLabel : '') + ')');
+            if (shouldCall) {
+                simulateIncomingCall(winner.contact);
+            } else {
+                simulateProactiveText(winner.contact, null);
+            }
         }
     }
 
@@ -5949,6 +6058,18 @@ Rules:
             // Defer so message rendering completes first
             setTimeout(() => {
                 try {
+                    // Track last user message for inactivity-based scheduling
+                    const chat = ctx.chat;
+                    if (Array.isArray(chat) && chat.length) {
+                        const last = chat[chat.length - 1];
+                        if (last && last.is_user) {
+                            state.lastUserMessageAt = Date.now();
+                            // Reset follow-up counts when user replies — they're back
+                            for (const c of state.contacts) {
+                                if (c._autonomousMsgs) c._autonomousMsgs.count = 0;
+                            }
+                        }
+                    }
                     harvestNPCs();
                     purgeStaleContacts();
                     saveMeta();
