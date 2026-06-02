@@ -5958,12 +5958,20 @@ Rules:
         const s = contact.schedule;
         const stale = scheduleNeedsRefresh(s);
         const now = getCurrentScheduleStatus(s);
+        // ── In-scene override: if NPC is actively in the chat, they're with you ──
+        const inScene = isNpcPresent(contact.name);
+        const displayStatus = inScene ? 'online' : (now ? now.status : 'online');
+        const displayActivity = inScene ? 'with you right now' : (now ? now.activity : 'unknown');
         const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
         const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
-        const nowStatus = now ? now.status : 'online';
-        const nowActivity = now ? now.activity : 'unknown';
+        const nowStatus = displayStatus;
+        const nowActivity = displayActivity;
         let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
             '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
+        if (inScene) {
+            html += '<div style="background:#e8f5e9;border-radius:8px;padding:6px 10px;margin-bottom:10px;font-size:11px;color:#2e7d32">' +
+                '📍 Present in chat — schedule overridden to ONLINE</div>';
+        }
         if (stale) {
             html += '<div style="background:#fff3cd;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#856404">' +
                 '⚠️ Schedule is from a previous week. <button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:none;color:#007aff;font-size:11px;cursor:pointer;padding:0;text-decoration:underline">Regenerate</button></div>';
