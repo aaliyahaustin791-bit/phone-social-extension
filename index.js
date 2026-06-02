@@ -159,9 +159,9 @@ function cleanThreads(threads) {
     function saveMeta() {
         const ctx = getCtx();
         const meta = getChatMeta();
-        // Strip _personality cache before save — it gets stale and bleeds across chats
+        // Strip _personality and _scheduleCache before save — they get stale and bleed across chats
         const contactsClean = state.contacts.map(c => {
-            const { _personality, ...rest } = c;
+            const { _personality, _scheduleCache, ...rest } = c;
             return rest;
         });
         // Pre-compute shared data regardless of save path availability
@@ -241,9 +241,10 @@ function cleanThreads(threads) {
         } catch (e) {
             console.error('[PhoneSocial] localStorage save error:', e?.message || e);
         }
-        // Clear in-memory _personality cache so next inferPersonality() is always fresh
+        // Clear in-memory _personality and _scheduleCache so next calls are always fresh
         for (const c of state.contacts) {
             delete c._personality;
+            delete c._scheduleCache;
         }
     }
 
@@ -503,6 +504,7 @@ function cleanThreads(threads) {
                 id: 'npc_' + norm.replace(/\s+/g, '_'),
                 name,
                 number: genNumber(),
+                schedule: null,
                 source: 'npc',
                 starred: false,
             });
@@ -566,6 +568,7 @@ function cleanThreads(threads) {
                     id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
                     name,
                     number: genNumber(),
+                    schedule: null,
                     source: 'npc-tag',
                     starred: false,
                 });
@@ -584,6 +587,7 @@ function cleanThreads(threads) {
                     id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
                     name,
                     number: genNumber(),
+                    schedule: null,
                     source: 'npc-tag',
                     starred: false,
                 });
@@ -612,6 +616,7 @@ function cleanThreads(threads) {
                 id: 'st_' + norm.replace(/[^a-z0-9_]/g, '_'),
                 name,
                 number: genNumber(),
+                schedule: null,
                 source: 'st-character',
                 starred: false,
             });
@@ -634,6 +639,7 @@ function cleanThreads(threads) {
                             id: 'st_group_' + norm.replace(/[^a-z0-9_]/g, '_'),
                             name,
                             number: genNumber(),
+                            schedule: null,
                             source: 'st-group',
                             starred: false,
                         });
@@ -2024,7 +2030,7 @@ function cleanThreads(threads) {
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v6</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v7</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -3210,6 +3216,7 @@ function viewDial() {
                         </div>
                     </div>
                 `).join('') : '<p style="font-size:12px;color:#8e8e93">No memories extracted yet. Keep texting to build a relationship profile.</p>'}
+                ${renderScheduleSection(c)}
             </div>
         `;
     }
@@ -3345,6 +3352,27 @@ function viewAlbums() {
                 saveMeta();
                 render();
                 return;
+            case 'generate-schedule': {
+                const gsId = el.getAttribute('data-id');
+                if (!gsId) return;
+                const btn = el;
+                btn.disabled = true;
+                const origText = btn.textContent;
+                btn.textContent = '⏳ Generating...';
+                generateSchedule(gsId).then(schedule => {
+                    if (schedule) {
+                        saveMeta();
+                        render();
+                    }
+                }).catch(e => {
+                    console.warn('[PhoneSocial] schedule generation failed:', e?.message);
+                    alert('Schedule generation failed. Check the API connection and try again.');
+                }).finally(() => {
+                    btn.disabled = false;
+                    btn.textContent = origText;
+                });
+                return;
+            }
             case 'open-thread':
                 state.activeContact = el.getAttribute('data-id');
                 if (!state.threads[state.activeContact]) state.threads[state.activeContact] = [];
@@ -3416,6 +3444,7 @@ function viewAlbums() {
                     id: 'manual_' + norm.replace(/[^a-z0-9_]/g, '_'),
                     name: name.trim(),
                     number: genNumber(),
+                    schedule: null,
                     source: 'manual',
                     starred: false,
                 });
@@ -5086,6 +5115,7 @@ MANDATORY RULES — NO EXCEPTIONS:
                     id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
                     name,
                     number: genNumber(),
+                    schedule: null,
                     source: 'scan',
                     memories: [],
                 });
@@ -5495,6 +5525,235 @@ Rules:
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Schedule Infrastructure (port from Marinara Engine)
+    // ═══════════════════════════════════════════════════════════════
+
+    const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const STATUS_KEYWORDS = {
+        sleep:'offline', sleeping:'offline', nap:'offline', napping:'offline', rest:'offline', resting:'offline',
+        work:'dnd', working:'dnd', class:'dnd', classes:'dnd', school:'dnd', studying:'dnd', study:'dnd',
+        meeting:'dnd', training:'dnd', exercise:'dnd', gym:'dnd', busy:'dnd',
+        commute:'idle', commuting:'idle', driving:'idle', travel:'idle', traveling:'idle',
+        shower:'idle', showering:'idle', cooking:'idle', eating:'idle', meal:'idle',
+    };
+
+    function getMonday(date) {
+        const d = new Date(date || Date.now());
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff); d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
+    function inferStatusFromActivity(activity) {
+        const lower = (activity || '').toLowerCase();
+        for (const [kw, st] of Object.entries(STATUS_KEYWORDS)) {
+            if (lower.includes(kw)) return st;
+        }
+        return 'online';
+    }
+
+    function getCurrentScheduleStatus(schedule, now) {
+        if (!schedule || !schedule.days) return null;
+        const d = now ? new Date(now) : new Date();
+        const dayName = DAYS[(d.getDay() + 6) % 7];
+        const daySchedule = schedule.days[dayName];
+        if (!Array.isArray(daySchedule) || !daySchedule.length) return null;
+        const curMin = d.getHours() * 60 + d.getMinutes();
+        for (const block of daySchedule) {
+            if (!block || !block.time) continue;
+            const [start, end] = block.time.split('-');
+            if (!start || !end) continue;
+            const [sh, sm] = start.split(':').map(Number);
+            const [eh, em] = end.split(':').map(Number);
+            const sMin = (sh || 0) * 60 + (sm || 0);
+            const eMin = (eh || 0) * 60 + (em || 0);
+            if (sMin <= curMin && curMin < eMin) return { status: block.status, activity: block.activity };
+            if (sMin > eMin && (curMin >= sMin || curMin < eMin)) return { status: block.status, activity: block.activity };
+        }
+        return null;
+    }
+
+    function scheduleNeedsRefresh(schedule) {
+        if (!schedule || !schedule.weekStart) return true;
+        return getMonday().getTime() > new Date(schedule.weekStart).getTime();
+    }
+
+    function parseScheduleResponse(content) {
+        let jsonStr = String(content || '').trim();
+        const mdMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (mdMatch) jsonStr = mdMatch[1].trim();
+        const braceStart = jsonStr.indexOf('{');
+        const braceEnd = jsonStr.lastIndexOf('}');
+        if (braceStart !== -1 && braceEnd !== -1) jsonStr = jsonStr.slice(braceStart, braceEnd + 1);
+        jsonStr = jsonStr
+            .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/,\s*([\]\}])/g, '$1')
+            .replace(/\.{3,}[^"}\]\n]*/g, '')
+            .replace(/\n\s*\n/g, '\n');
+        let data;
+        try { data = JSON.parse(jsonStr); } catch (_) {
+            const lines = jsonStr.split('\n').filter(l => {
+                const t = l.trim();
+                if (!t) return false;
+                if (/^[{}\[\],]/.test(t) || /^"/.test(t) || /^\d/.test(t) || /^[}\]]/.test(t)) return true;
+                return false;
+            });
+            const repaired = lines.join('\n').replace(/,\s*([\]\}])/g, '$1');
+            try { data = JSON.parse(repaired); } catch (e) {
+                console.warn('[PhoneSocial] schedule parse failed:', e?.message, 'raw:', content.slice(0, 200));
+                return null;
+            }
+        }
+        const days = {};
+        for (const day of DAYS) {
+            const blocks = Array.isArray(data.days?.[day]) ? data.days[day] : [];
+            days[day] = blocks.map(b => ({
+                time: b.time || '00:00-00:00',
+                activity: b.activity || 'free time',
+                status: (b.status && ['online','idle','dnd','offline'].includes(b.status)) ? b.status : inferStatusFromActivity(b.activity),
+            }));
+        }
+        return {
+            weekStart: getMonday().toISOString(),
+            talkativeness: Math.max(0, Math.min(100, data.talkativeness ?? 50)),
+            inactivityThresholdMinutes: Math.max(15, Math.min(360, data.inactivityThresholdMinutes ?? 120)),
+            days,
+        };
+    }
+
+    async function generateSchedule(contactId) {
+        const contact = state.contacts.find(c => c.id === contactId);
+        if (!contact) return null;
+        const ctx = getCtx();
+        let charName = contact.name;
+        let charDesc = '';
+        let charPersonality = '';
+        if (ctx?.characters) {
+            const match = ctx.characters.find(ch => ch && ch.name && ch.name.toLowerCase() === charName.toLowerCase());
+            if (match?.data) {
+                charDesc = (match.data.description || '').trim().slice(0, 800);
+                charPersonality = (match.data.personality || '').trim().slice(0, 500);
+            }
+        }
+        let continuity = '';
+        if (contact.schedule && contact.schedule.days) {
+            const prevBlocks = [];
+            for (const day of DAYS) {
+                const b = contact.schedule.days[day];
+                if (Array.isArray(b)) prevBlocks.push(day + ': ' + b.map(x => x.time + ' ' + x.activity).join(', '));
+            }
+            continuity = '\n\nRecent continuity:\nThis character had the following schedule last week. Use it to maintain consistency:\n' +
+                prevBlocks.join('\n') + '\nIf recent events changed their job, school, health, relationships, or obligations, reflect those changes. Otherwise preserve their established routine.';
+        }
+        const systemPrompt = [
+            'You are a schedule generator. Create a realistic weekly schedule for a character based on their personality and description.',
+            '',
+            'Character: ' + charName,
+            'Description: ' + (charDesc || '(no description available)'),
+            'Personality: ' + (charPersonality || '(no personality info)'),
+            continuity,
+            '',
+            'Generate a schedule for each day of the week (Monday through Sunday).',
+            'Each day should have time blocks covering the full 24 hours.',
+            'The schedule should be realistic and consistent with the character\'s lifestyle.',
+            '',
+            'Each time block must include a "status" field:',
+            '- "online": awake and available (free time, socializing, casual activities)',
+            '- "idle": semi-available (eating, commuting, showering, cooking)',
+            '- "dnd": busy / do not disturb (working, studying, training, in a meeting)',
+            '- "offline": unavailable (sleeping, passed out, unconscious)',
+            '',
+            'Also assess talkativeness (0-100):',
+            '0-20: Very introverted, rarely initiates  |  21-40: Quiet  |  41-60: Average',
+            '61-80: Social, chats frequently  |  81-100: Very chatty',
+            '',
+            'Estimate inactivityThresholdMinutes (how long they wait before reaching out):',
+            'Patient: 180-360 min  |  Average: 60-180 min  |  Chatty: 15-60 min',
+            '',
+            'Respond in EXACTLY this JSON format (no markdown, no code blocks, just raw JSON):',
+            '{',
+            '  "talkativeness": 65,',
+            '  "inactivityThresholdMinutes": 45,',
+            '  "days": {',
+            '    "Monday": [',
+            '      {"time":"00:00-07:00","activity":"sleeping","status":"offline"},',
+            '      {"time":"07:00-08:00","activity":"morning routine","status":"idle"},',
+            '      ...',
+            '    ],',
+            '    "Tuesday": [...],',
+            '    ...through Sunday...',
+            '  }',
+            '}',
+            'Include ALL 7 days. No ellipsis, comments, or placeholders in the actual output.',
+        ].filter(Boolean).join('\n');
+
+        const text = await callTurboApi(systemPrompt, 'Generate the schedule now.');
+        if (!text) return null;
+        const schedule = parseScheduleResponse(text);
+        if (!schedule) return null;
+        contact.schedule = schedule;
+        contact._scheduleCache = undefined;
+        const chatKeyAtStart = getChatKey();
+        // Small delay to let any pending chat switches settle
+        await new Promise(r => setTimeout(r, 50));
+        if (getChatKey() !== chatKeyAtStart) {
+            console.warn('[PhoneSocial] chat changed during schedule generation — discarding');
+            return null;
+        }
+        saveMeta();
+        console.log('[PhoneSocial] schedule generated for ' + contact.name + ' (talk=' + schedule.talkativeness + ', threshold=' + schedule.inactivityThresholdMinutes + 'min)');
+        return schedule;
+    }
+
+    function renderScheduleSection(contact) {
+        if (!contact) return '';
+        const hasSchedule = contact.schedule && contact.schedule.days && Object.keys(contact.schedule.days).length > 0;
+        if (!hasSchedule) {
+            return '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
+                '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>' +
+                '<p style="font-size:12px;color:#8e8e93;margin:0 0 8px">No schedule generated yet. Generate a weekly schedule to control when this NPC can reach out.</p>' +
+                '<button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:#007aff;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer">⚡ Generate Schedule</button>';
+        }
+        const s = contact.schedule;
+        const stale = scheduleNeedsRefresh(s);
+        const now = getCurrentScheduleStatus(s);
+        const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
+        const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
+        const nowStatus = now ? now.status : 'online';
+        const nowActivity = now ? now.activity : 'unknown';
+        let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
+            '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
+        if (stale) {
+            html += '<div style="background:#fff3cd;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#856404">' +
+                '⚠️ Schedule is from a previous week. <button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:none;color:#007aff;font-size:11px;cursor:pointer;padding:0;text-decoration:underline">Regenerate</button></div>';
+        }
+        html += '<div style="background:#f2f2f7;border-radius:10px;padding:10px;margin-bottom:8px">' +
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+            '<span style="font-size:16px">' + (statusEmoji[nowStatus] || '') + '</span>' +
+            '<span style="font-size:13px;font-weight:600;color:#1c1c1e">' + nowStatus.toUpperCase() + '</span>' +
+            '<span style="font-size:12px;color:#8e8e93">— ' + escape(nowActivity) + '</span></div>' +
+            '<div style="font-size:11px;color:#8e8e93">Talkativeness: ' + (s.talkativeness || 50) + '/100 • Reaches out after ' + (s.inactivityThresholdMinutes || 120) + 'min</div></div>';
+        // 7-day compact grid
+        const todayIdx = (new Date().getDay() + 6) % 7;
+        html += '<div style="display:flex;flex-direction:column;gap:4px;font-size:10px;max-height:200px;overflow-y:auto">';
+        for (let i = 0; i < 7; i++) {
+            const day = DAYS[i];
+            const blocks = Array.isArray(s.days[day]) ? s.days[day] : [];
+            const isToday = i === todayIdx;
+            const dotColors = blocks.slice(0, 8).map(b => '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (statusColors[b.status] || '#ccc') + ';margin-right:1px" title="' + escape(b.time + ' ' + b.activity) + '"></span>').join('');
+            const timePreview = blocks.slice(0, 3).map(b => '<span style="color:#8e8e93">' + escape(b.time) + '</span>').join(' ');
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:4px' + (isToday ? ';background:#e8f0fe' : '') + '">' +
+                '<span style="width:40px;font-weight:' + (isToday ? '600' : '400') + ';color:#1c1c1e">' + day.slice(0, 3) + '</span>' +
+                '<span style="flex:1">' + dotColors + '</span>' +
+                '<span style="font-size:9px">' + timePreview + '</span></div>';
+        }
+        html += '</div>';
+        html += '<div style="margin-top:10px"><button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:1px solid #007aff;color:#007aff;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer">🔄 Regenerate Schedule</button></div>';
+        return html;
+    }
+
     // -------------------------------------------------------------------
     // Lifecycle
     // -------------------------------------------------------------------
@@ -5520,6 +5779,9 @@ Rules:
             // conversation content but aren't necessarily chat senders, so the sender
             // check below would incorrectly remove them immediately.
             if (c.source === 'scan') return true;
+            // Contacts with generated schedules are preserved — their schedule is
+            // authoritative and they may not appear as chat senders in every session.
+            if (c.schedule && c.schedule.days && Object.keys(c.schedule.days).length > 0) return true;
             if (isBlocked(c.name, blocked)) {
                 console.log(`[PhoneSocial] purge: blocked "${c.name}"`);
                 return false;
