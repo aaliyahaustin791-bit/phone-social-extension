@@ -92,14 +92,11 @@
         const ctx = getCtx();
         const set = new Set(['system', 'sillytavern system', 'narrator', 'akuma']);
         if (!ctx) return set;
-        // All name variants for the current character
+        // BLOCK the full active character name ONLY — do NOT block individual
+        // name parts. Ensemble cards like "Corey + Jay" write multiple NPCs;
+        // blocking "Corey" and "Jay" would prevent harvesting them as contacts.
         const name2 = (ctx.name2 || ctx.name || '').trim().toLowerCase();
-        if (name2) {
-            set.add(name2);
-            for (const part of name2.split(/[\s_\-]+/)) {
-                if (part.length > 1) set.add(part);
-            }
-        }
+        if (name2) set.add(name2);
         // All name variants for the user
         const name1 = (ctx.name1 || '').trim().toLowerCase();
         if (name1) {
@@ -117,25 +114,33 @@
         }
         // Block the FULL names of loaded ST character cards — these are
         // roleplay characters, not NPCs. But do NOT block individual name
-        // parts (e.g. "Corey" from "Corey + Jay") — those may appear as
-        // separate speakers in chat and should be harvestable.
+        // parts that belong to the ACTIVE ensemble card (e.g. "Corey" from
+        // "Corey + Jay") — those ARE the NPCs we want to harvest.
         if (ctx.characters) {
+            const activeCardParts = name2 ? name2.split(/[+,&\s]+/).map(p => p.trim().toLowerCase()).filter(p => p.length > 1) : [];
             for (const ch of ctx.characters) {
                 if (!ch?.name) continue;
                 const n = ch.name.trim().toLowerCase();
-                if (n) set.add(n);
+                if (!n) continue;
+                // Skip cards whose names are parts of the active ensemble card
+                // (e.g. "Corey" is a part of "Corey + Jay" — don't block it)
+                if (activeCardParts.includes(n)) continue;
+                set.add(n);
             }
         }
         return set;
     }
 
-    /** Check if a name matches any blocked entry (fuzzy: contains or is contained by) */
+    /** Check if a name matches any blocked entry (contains a blocked substring) */
     function isBlocked(name, blockedSet) {
         const norm = (name || '').trim().toLowerCase();
         if (!norm) return true;
         if (blockedSet.has(norm)) return true;
         for (const b of blockedSet) {
-            if (norm.includes(b) || b.includes(norm)) return true;
+            // Only check if the name CONTAINS a blocked substring.
+            // Do NOT check the reverse (b.includes(norm)) — that would
+            // incorrectly block "Corey" because "Corey + Jay" contains it.
+            if (norm.includes(b)) return true;
         }
         return false;
     }
@@ -501,11 +506,18 @@ function cleanThreads(threads) {
         const blocked = getBlockedSet();
         const debug = [];
         const seen = new Set(state.contacts.map(c => c.name.toLowerCase()));
+        // Active character card name — never harvest the card itself
+        const activeCardName = (ctx.name2 || ctx.name || '').trim().toLowerCase();
         for (const msg of ctx.chat) {
             if (!msg || msg.is_user || msg.is_system) continue;
             const name = (msg.name || '').trim();
             if (!name) continue;
             const norm = name.toLowerCase();
+            // Skip the active character card itself — it's not an NPC
+            if (activeCardName && (norm === activeCardName || norm.includes(activeCardName) || activeCardName.includes(norm))) {
+                debug.push(`SKIP(active card): "${name}"`);
+                continue;
+            }
             if (seen.has(norm)) { debug.push(`SKIP(seen): "${name}"`); continue; }
             if (isBlocked(name, blocked)) { debug.push(`SKIP(blocked): "${name}"`); continue; }
             seen.add(norm);
@@ -525,21 +537,134 @@ function cleanThreads(threads) {
             console.log(`[PhoneSocial] harvest: capping ${state.contacts.length} contacts → 30`);
             state.contacts = state.contacts.slice(0, 30);
         }
+        // ── Ensemble card pass: split compound names like "Corey + Jay" ──
+        // Ensemble cards write multiple NPCs through a single character card.
+        // msg.name is always "Corey + Jay" — never the individuals. Split on
+        // +/,/& to harvest Corey and Jay as separate contacts.
+        harvestEnsembleNPCs(blocked, seen, debug);
         // Second pass: scan message text for named NPCs mentioned in prose/dialogue
         try {
             harvestNamesFromText(blocked, seen, debug);
         } catch (_e) {
             console.warn('[PhoneSocial] text harvest failed:', _e);
         }
-        // Third pass: pull contacts from ST's loaded character list + group members
-        // DISABLED: this grabs every character card in the roster, not just chat-relevant NPCs.
-        // Contacts should come from chat messages only (msg.name + text extraction above).
-        // try {
-        //     const fromSt = harvestSTCharacters(blocked, seen, debug);
-        //     if (fromSt.length) debug.push(...fromSt.map(n => `ST CHAR: "${n}"`));
-        // } catch (_e) {
-        //     console.warn('[PhoneSocial] ST character harvest failed:', _e);
-        // }
+        // Third pass: pull NPCs from the active character card definition.
+        // Only harvest from the card being used in this chat — NOT every
+        // loaded character in the roster. For ensemble cards like "Corey + Jay",
+        // split on +/,/& to extract individual NPCs from the character definition.
+        try {
+            harvestFromActiveCard(blocked, seen, debug);
+        } catch (_e) {
+            console.warn('[PhoneSocial] active card harvest failed:', _e);
+        }
+        // Diagnostic: show contacts AFTER all harvest passes
+        console.log('[PhoneSocial] harvestNPCs DONE: state.contacts.length = ' + state.contacts.length + ', names: ' + state.contacts.map(c => c.name).join(', '));
+    }
+
+    // -------------------------------------------------------------------
+    // Active character card NPC extraction
+    // Reads the character card definition for the CURRENT chat only.
+    // For ensemble cards like "Corey + Jay", splits on +/,/& to extract
+    // individual NPCs. Also scans the card's description for <npc:Name> tags.
+    // This catches NPCs even before any chat messages are exchanged.
+    // -------------------------------------------------------------------
+    function harvestFromActiveCard(blocked, seen, debug) {
+        const ctx = getCtx();
+        if (!ctx?.characters || !Array.isArray(ctx.characters)) return;
+        const activeName = (ctx.name2 || ctx.name || '').trim().toLowerCase();
+        if (!activeName) return;
+        // Find the active character card
+        const card = ctx.characters.find(ch => ch && ch.name && ch.name.toLowerCase() === activeName);
+        if (!card) {
+            console.log('[PhoneSocial] harvestFromActiveCard: no card found for "' + activeName + '"');
+            return;
+        }
+        console.log('[PhoneSocial] harvestFromActiveCard: found card "' + card.name + '"');
+        // Split ensemble card name (e.g. "Corey + Jay" → ["Corey", "Jay"])
+        if (/[+,&]/.test(card.name)) {
+            const parts = card.name.split(/[+,&]\s*/).map(p => p.trim()).filter(p => p.length > 1);
+            console.log('[PhoneSocial] harvestFromActiveCard ensemble: ' + JSON.stringify(parts));
+            for (const part of parts) {
+                const norm = part.toLowerCase();
+                if (seen.has(norm)) { debug.push(`CARD-SKIP(seen): "${part}"`); continue; }
+                if (isBlocked(part, blocked)) { debug.push(`CARD-SKIP(blocked): "${part}"`); continue; }
+                seen.add(norm);
+                debug.push(`CARD-HARVEST: "${part}" (from active card "${card.name}")`);
+                state.contacts.push({
+                    id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
+                    name: part,
+                    number: genNumber(),
+                    schedule: null,
+                    source: 'npc',
+                    starred: false,
+                });
+            }
+        }
+        // Scan card description for <npc:Name> tags
+        if (card.data) {
+            const desc = (card.data.description || '') + ' ' + (card.data.personality || '') + ' ' + (card.data.scenario || '');
+            const reNpc = /<npc:([^>]{2,48})>/gi;
+            let m;
+            while ((m = reNpc.exec(desc)) !== null) {
+                const name = m[1].trim();
+                const norm = name.toLowerCase();
+                if (seen.has(norm)) { debug.push(`CARD-TAG-SKIP(seen): "${name}"`); continue; }
+                if (isBlocked(name, blocked)) { debug.push(`CARD-TAG-SKIP(blocked): "${name}"`); continue; }
+                seen.add(norm);
+                debug.push(`CARD-TAG: "${name}" (from active card description)`);
+                state.contacts.push({
+                    id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
+                    name,
+                    number: genNumber(),
+                    schedule: null,
+                    source: 'npc-tag',
+                    starred: false,
+                });
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Ensemble card NPC extraction
+    // When a chat uses an ensemble character card (e.g. "Corey + Jay"),
+    // every message has msg.name = "Corey + Jay". Split compound names
+    // on +/,/& to harvest each individual NPC as a separate contact.
+    // -------------------------------------------------------------------
+    function harvestEnsembleNPCs(blocked, seen, debug) {
+        const ctx = getCtx();
+        if (!ctx?.chat) return;
+        const ensembleNames = new Set();
+        // Collect all unique compound speaker names
+        for (const msg of ctx.chat) {
+            if (!msg || msg.is_user || msg.is_system) continue;
+            const name = (msg.name || '').trim();
+            if (!name) continue;
+            // Only split names that contain ensemble delimiters
+            if (!/[+,&]/.test(name)) continue;
+            ensembleNames.add(name);
+        }
+        // Split each compound name and harvest individuals
+        for (const compound of ensembleNames) {
+            const parts = compound.split(/[+,&]\s*/).map(p => p.trim()).filter(p => p.length > 1);
+            console.log('[PhoneSocial] ensemble split: "' + compound + '" → ' + JSON.stringify(parts));
+            for (const part of parts) {
+                const norm = part.toLowerCase();
+                if (seen.has(norm)) { debug.push(`ENSEMBLE-SKIP(seen): \"${part}\"`); continue; }
+                if (isBlocked(part, blocked)) { debug.push(`ENSEMBLE-SKIP(blocked): \"${part}\"`); continue; }
+                // Extra guard: skip single-char parts (e.g. "+" or "&" alone after split)
+                if (part.length < 2) continue;
+                seen.add(norm);
+                debug.push(`ENSEMBLE-HARVEST: \"${part}\" (from \"${compound}\")`);
+                state.contacts.push({
+                    id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
+                    name: part,
+                    number: genNumber(),
+                    schedule: null,
+                    source: 'npc',
+                    starred: false,
+                });
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -4559,7 +4684,10 @@ function viewAlbums() {
     // ─── Story-aware proactive helpers ──────────────────────────────
     // Checks whether an NPC is currently "present" in the main chat —
     // if they've spoken in the last few messages, they're in the scene.
-    function isNpcPresent(contactName) {
+    // opts.narration: include AI narration scan for ensemble cards (default true).
+    // Set to false when you need speaker-only detection (e.g. green banner).
+    function isNpcPresent(contactName, opts = {}) {
+        const useNarration = opts.narration !== false;
         try {
             const ctx = getCtx();
             if (!ctx?.chat) return false;
@@ -4569,16 +4697,30 @@ function viewAlbums() {
             // few real messages to detect NPC presence. System messages don't have
             // NPC names anyway, so checking them is harmless.
             const recent = ctx.chat.slice(-80).filter(m => !!m);
+            // Pass 1: speaker check — NPC has a speaking line → definitely present
             for (const m of recent) {
                 const speaker = (m.name || '').toLowerCase();
                 // Exact match only — "Corey + Jay" is a single character card,
                 // NOT two separate speakers. Do NOT split on +/,/&.
-                if (speaker === nameLower) {
-                    console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' FOUND in recent ' + recent.length + ' msgs → BLOCKING proactive');
-                    return true;
+                if (speaker === nameLower) return true;
+            }
+            // Pass 2: ensemble card detection — when all NPCs are written through
+            // a single character card (e.g. "COD: Task Force RPG"), individual NPCs
+            // never appear as speakers. Scan only the MOST RECENT AI message for
+            // NPC name mentions. The AI's latest narration describes what's happening
+            // RIGHT NOW — if an NPC isn't in the latest message, they've likely
+            // left the scene (or are elsewhere). This prevents flagging all squad
+            // members as present when the AI describes everyone across messages.
+            if (useNarration) {
+                const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const wordBoundary = new RegExp('\\b' + escaped + '\\b');
+                // Only the single most recent AI message — this is the current scene.
+                const latestAi = [...ctx.chat].reverse().find(m => !!m && !m.is_user);
+                if (latestAi) {
+                    const content = (latestAi.mes || latestAi.text || '').toLowerCase();
+                    if (wordBoundary.test(content)) return true;
                 }
             }
-            console.log('[PhoneSocial] isNpcPresent: ' + contactName + ' NOT in recent ' + recent.length + ' msgs, speakers: ' + recent.map(m => (m.name || '?')).join(', '));
         } catch (_) {}
         return false;
     }
@@ -4603,8 +4745,113 @@ function viewAlbums() {
     // Scans recent main chat for story beats that warrant a proactive message.
     // Returns {type, intensity} or null if nothing significant happened.
     // STRICT RULES:
-    //  - NPC must have SPOKEN in the scene (not just mentioned) for conflict/exit
-    //  - NPC still in the last 3 messages → skip (they're right there)
+    // ─── Narrative-triggered proactive check ──────────────────────────
+    // Scans the latest AI message body for cues that NPCs are trying to
+    // contact the user — "your phone's blowing up", "Mom's been texting you", etc.
+    // Bypasses the speaker-history gates (hasAppearedInChat, detectStoryTrigger
+    // speaker requirement) because the AI narration IS the evidence.
+    // Called from MESSAGE_RECEIVED hook, so it fires immediately after each
+    // AI response rather than waiting for the 45-second proactive timer.
+    function checkNarrativeTriggers() {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat || !state.settings.autoReplies || state.userDnd) return;
+            // Only trigger on AI messages (not user messages)
+            const latest = ctx.chat[ctx.chat.length - 1];
+            if (!latest || latest.is_user || latest.is_system) return;
+            const text = (latest.mes || latest.text || '').toLowerCase();
+            if (!text) return;
+
+            // ── Pattern 1: Generic phone-buzzing cues ──
+            const phoneCues = [
+                /blowing up your phone/i, /phone (?:keeps|has been|is) (?:buzzing|vibrating|ringing)/i,
+                /phone (?:going|has been going) off/i, /blowing up/i,
+                /missed (?:a |some |)(?:call|text|message)/i,
+                /trying to (?:reach|call|get ahold of|get hold of) you/i,
+                /been (?:trying to |)(?:call|text|message|reach) you/i,
+                /(?:called|texted|messaged) you/i, /left you a (?:voicemail|message|text)/i,
+                /(?:check|look at) your phone/i, /phone (?:rang|went off)/i,
+            ];
+            let genericTrigger = false;
+            for (const cue of phoneCues) {
+                if (cue.test(text)) { genericTrigger = true; break; }
+            }
+
+            // ── Pattern 2: Contact name near a communication verb ──
+            const comVerbs = /(?:text(?:ing|ed|s)?|call(?:ing|ed|s)?|messag(?:ing|ed|es)?|reach(?:ing|ed)?\s*out|voicemail|phone|buzz(?:ing|ed)?|ring(?:ing|s)?)/i;
+
+            if (!genericTrigger && !comVerbs.test(text)) return;
+
+            // ── Find eligible non-present contacts ──
+            const nonPresent = [];
+            for (const c of state.contacts) {
+                if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
+                if (isNpcPresent(c.name)) continue;
+                // Skip if they texted recently (2-min window)
+                const thread = state.threads[c.id];
+                if (Array.isArray(thread) && thread.length) {
+                    const last = thread[thread.length - 1];
+                    if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 120000) continue;
+                }
+                nonPresent.push(c);
+            }
+            if (!nonPresent.length) return;
+
+            // ── Identify implicated contacts ──
+            const implicated = [];
+            // Pass 1: Contact name near a communication verb
+            for (const c of nonPresent) {
+                const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const nameRe = new RegExp('\\b' + escaped.toLowerCase() + '\\b', 'i');
+                if (!nameRe.test(text)) continue;
+                // Check if the name appears near a communication verb (±80 chars)
+                const idx = text.indexOf(c.name.toLowerCase());
+                const surround = text.slice(Math.max(0, idx - 80), Math.min(text.length, idx + c.name.length + 80));
+                if (comVerbs.test(surround)) {
+                    implicated.push(c);
+                }
+            }
+            // Pass 2: Generic trigger + name mention (looser)
+            if (!implicated.length && genericTrigger) {
+                for (const c of nonPresent) {
+                    const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    if (new RegExp('\\b' + escaped.toLowerCase() + '\\b', 'i').test(text)) {
+                        implicated.push(c);
+                    }
+                }
+            }
+            // Pass 3: Generic trigger with no names — grab up to 2 random eligible contacts
+            if (!implicated.length && genericTrigger) {
+                const shuffled = [...nonPresent].sort(() => Math.random() - 0.5);
+                implicated.push(...shuffled.slice(0, 2));
+            }
+            if (!implicated.length) return;
+
+            console.log('[PhoneSocial] 📖 narrative trigger: "' + text.slice(0, 100) + '..." → ' + implicated.map(c => c.name).join(', '));
+
+            // ── Fire up to 2 contacts with 3s stagger ──
+            const toFire = implicated.slice(0, 2);
+            toFire.forEach((c, i) => {
+                setTimeout(() => {
+                    if (isNpcPresent(c.name)) return; // Re-check presence
+                    c._lastProactiveTime = Date.now();
+                    const personality = inferPersonality(c);
+                    const shouldCall = personality.prefersCall || Math.random() < 0.25;
+                    console.log('[PhoneSocial] 📖 narrative fire: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text'));
+                    if (shouldCall) {
+                        simulateIncomingCall(c);
+                    } else {
+                        simulateProactiveText(c, null);
+                    }
+                }, i * 3000);
+            });
+        } catch (e) {
+            console.warn('[PhoneSocial] checkNarrativeTriggers error:', e);
+        }
+    }
+
+    // Scans recent main chat for story beats that warrant a proactive message.
+    //  - Scene exit requires user messages with exit language after NPC's departure
     //  - Conflict requires NPC as speaker or direct target, not just mentioned nearby
     //  - No "mentioned" trigger — too noisy
     function detectStoryTrigger(contactName) {
@@ -4773,6 +5020,18 @@ function viewAlbums() {
 
         // Debug: log which NPCs are being skipped
         console.log('[PhoneSocial] 🔍 proactive check: ' + contacts.length + ' contacts, autoReplies=' + state.settings.autoReplies);
+        // Single diagnostic: show the latest 3 messages so we can tell what's current
+        try {
+            const ctx = getCtx();
+            if (ctx?.chat) {
+                const tail = ctx.chat.slice(-3).filter(m => !!m);
+                const sample = tail.map(m =>
+                    '[' + (m.name || '?') + (m.is_system ? '/sys' : '') + (m.is_user ? '/user' : '') + '] ' +
+                    ((m.mes || m.text || '').slice(0, 100))
+                );
+                console.log('[PhoneSocial] 📝 scene tail: ' + sample.join(' | '));
+            }
+        } catch (_) {}
         const skippedPresent = contacts.filter(c => isNpcPresent(c.name));
         if (skippedPresent.length) {
             console.log('[PhoneSocial] 🚫 skipping ' + skippedPresent.length + ' present NPCs: ' + skippedPresent.map(c => c.name).join(', '));
@@ -4887,6 +5146,119 @@ function viewAlbums() {
             } else {
                 simulateProactiveText(winner.contact, null);
             }
+        }
+    }
+
+    // ─── Narrative-triggered proactive check ─────────────────────────
+    // Scans the latest AI message for cues that NPCs are trying to
+    // contact the user (phone blowing up, texting, calling). When found,
+    // immediately triggers calls/texts from implicated contacts,
+    // bypassing the speaker-history gates that require NPCs to have
+    // appeared as senders in the chat (detectStoryTrigger, hasAppearedInChat).
+    function checkNarrativeTriggers() {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat) return;
+            const contacts = state.contacts;
+            if (!contacts.length || !state.settings.autoReplies) return;
+            if (state.userDnd) return;
+
+            // Get latest AI message (not user)
+            const latestAi = [...ctx.chat].reverse().find(m => !!m && !m.is_user);
+            if (!latestAi) return;
+
+            const text = (latestAi.mes || latestAi.text || '').toLowerCase();
+            if (!text || text.length < 20) return;
+
+            // ── Pattern 1: Generic "phone blowing up" cues ──
+            const phoneBlowingUp = /\b(blowing\s+up\s+your\s+phone|phone\s+(keeps?\s+)?(buzzing|vibrating|ringing|going\s+off)|phone\s+(won'?t\s+stop|hasn'?t\s+stopped)|(missed|ignoring)\s+(a\s+)?(bunch|ton|lots?)\s+of\s+(calls?|texts?|messages?|notifications?)|your\s+phone\s+(is\s+)?(blowing|exploding))\b/i;
+
+            // ── Pattern 2: Group reference near communication verbs ──
+            const groupPhoneRe = /\b(your\s+(family|parents?|siblings?|friends?|crew|squad|team|group|folks?|people)\s+(has|have|is|are|been|keep|keeps)\s+(texting|calling|messaging|trying\s+to\s+reach|blowing\s+up|hitting\s+up|contacting|checking\s+in|reaching\s+out))\b/i;
+
+            let triggeredContacts = [];
+
+            // Helper: has this NPC had recent SMS interaction?
+            const hasRecent = (c) => {
+                const thread = state.threads[c.id];
+                if (!Array.isArray(thread) || !thread.length) return false;
+                const last = thread[thread.length - 1];
+                if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 600000) return true;
+                if (last.from === 'me' && (Date.now() - (last.ts || 0)) < 120000) return true;
+                return false;
+            };
+
+            // ── Check 1: Specific contact names near communication verbs ──
+            // "Mom's been texting you", "Dad keeps calling", "Sarah left a voicemail"
+            for (const c of contacts) {
+                if (!c.id || !c.name) continue;
+                if (c.source === 'st-character' || c.source === 'st-group') continue;
+                if (isNpcPresent(c.name)) continue;
+                if (hasRecent(c)) continue;
+
+                const nameLower = c.name.toLowerCase();
+                const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+                // Name near a communication verb (within ~50 chars, same sentence)
+                const nameCommsRe = new RegExp(
+                    '\\b' + escaped + '\\b[^.]{0,50}\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out)\\b|' +
+                    '\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out)\\b[^.]{0,50}\\b' + escaped + '\\b',
+                    'i'
+                );
+
+                if (nameCommsRe.test(text)) {
+                    triggeredContacts.push(c);
+                    console.log('[PhoneSocial] 📖 narrative name-match: ' + c.name + ' mentioned with comm verb');
+                }
+            }
+
+            // ── Check 2: Generic phone-blowing-up / group → trigger eligible non-present contacts ──
+            if (triggeredContacts.length === 0 && (phoneBlowingUp.test(text) || groupPhoneRe.test(text))) {
+                const genericMatch = text.match(groupPhoneRe);
+                const groupLabel = genericMatch ? genericMatch[2] : 'contacts';
+                console.log('[PhoneSocial] 📖 narrative generic-cue: phone blowing up / ' + groupLabel + ' reaching out');
+
+                const candidates = [];
+                for (const c of contacts) {
+                    if (!c.id || !c.name) continue;
+                    if (c.source === 'st-character' || c.source === 'st-group') continue;
+                    if (isNpcPresent(c.name)) continue;
+                    if (hasRecent(c)) continue;
+                    candidates.push(c);
+                }
+
+                if (candidates.length) {
+                    // Pick 1-2 random candidates
+                    const count = Math.min(candidates.length, Math.random() < 0.5 ? 1 : 2);
+                    for (let i = candidates.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+                    }
+                    triggeredContacts = candidates.slice(0, count);
+                }
+            }
+
+            if (!triggeredContacts.length) return;
+
+            // ── Cap: no more than 2 contacts per narrative trigger ──
+            if (triggeredContacts.length > 2) triggeredContacts = triggeredContacts.slice(0, 2);
+
+            // ── Execute: trigger calls/texts from matched contacts ──
+            for (const c of triggeredContacts) {
+                const personality = inferPersonality(c);
+                const shouldCall = personality.prefersCall || (personality.initiative >= 7 && Math.random() < 0.4);
+                c._lastProactiveTime = Date.now();
+
+                console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + ' (AI mentioned contact activity)');
+
+                if (shouldCall) {
+                    simulateIncomingCall(c);
+                } else {
+                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' });
+                }
+            }
+        } catch (e) {
+            console.warn('[PhoneSocial] checkNarrativeTriggers error:', e);
         }
     }
 
@@ -5135,7 +5507,7 @@ Rules:
         if (!ctx?.chat || !Array.isArray(ctx.chat)) return 0;
         const contacts = state.contacts;
 
-        const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
+        const myName = ctx?.name2 || ctx?.name || 'Character';
         const user = ctx?.name1 || 'You';
 
         // Get up to 80 messages from main chat (deeper scan)
@@ -5177,17 +5549,22 @@ Return ONLY valid JSON (no markdown, no extra text):
     { "name": "NPC_Name", "about": "Brief 1-sentence description." }
   ],
   "memories": [
-    { "name": "ContactName", "text": "Specific durable fact...", "tags": ["promise"] }
+    { "name": "ContactName", "text": "Specific durable fact...", "quote": "verbatim excerpt from transcript", "tags": ["promise"] }
   ]
 }
 
 MANDATORY RULES — NO EXCEPTIONS:
 - "npcs": Find EVERY side character — those who speak AND those mentioned by name. Parents, distant relatives, off-screen characters who matter to the story should be included even if they don't appear in person.
-- "memories": 1 to 5 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
+- "memories": 3 to 10 total. Each memory: 1 sentence, 10-60 words. The "name" must match one of the NPCs you listed in "npcs".
 - Memories must be durable facts: promises, secrets, plans, betrayals, favors, relationship changes.
-- ANTI-OMNISCIENCE RULE: Do NOT create memories about things said ABOUT an NPC by other characters when the NPC wasn't there. If characters discuss plans to surprise Sarah, that is NOT a memory for Sarah — she wasn't present. Only create memories about what the NPC themselves said/did, or what was said directly TO them while they were present.`;
+- ANTI-OMNISCIENCE RULE: Do NOT create memories about things said ABOUT an NPC by other characters when the NPC wasn't there. If characters discuss plans to surprise Sarah, that is NOT a memory for Sarah — she wasn't present. Only create memories about what the NPC themselves said/did, or what was said directly TO them while they were present.
+- 🚫 ANTI-HALLUCINATION: NEVER invent dialogue, events, or details. Every memory MUST be directly traceable to something that actually happened in the transcript. If you're unsure, skip it. A blank memory is better than a fake one.
+- 📎 Include a "quote" field with each memory: a SHORT verbatim excerpt (5-15 words) from the transcript that PROVES this fact. The quote MUST appear EXACTLY in the transcript above — copy-paste it, do not paraphrase.
 
-        const userPrompt = `Roleplay conversation transcript:\n\n${transcript}\n\nExtract ALL NPCs and relationship memories from this conversation. Do NOT skip anyone — find every side character.`;
+⚠️ ENSEMBLE CARD WARNING: The conversation partner "${myName}" may represent MULTIPLE distinct characters writing through a single card. If you see individual names like "Corey" or "Jay" acting independently in the narrative, they ARE separate NPCs — extract each as its own NPC with their own memories. Do NOT treat "${myName}" as one person.`;
+
+        const contactNames = contacts.map(c => c.name).join(', ');
+        const userPrompt = `Roleplay conversation transcript:\n\n${transcript}\n\nExtract ALL NPCs and relationship memories from this conversation. Do NOT skip anyone — find every side character.\n\nExisting contacts: ${contactNames || 'none'}\n\nCreate memories for EACH of these contacts that appears in the transcript above.`;
 
         const text = await callTurboApi(systemPrompt, userPrompt);
         if (!text) {
@@ -5213,13 +5590,28 @@ MANDATORY RULES — NO EXCEPTIONS:
             // Blocked names (uses shared fuzzy matcher)
             const blocked = getBlockedSet();
 
-            // Create contacts for new NPCs
+            // Create contacts for new NPCs, add about-memories for ALL
             for (const n of npcs) {
                 const name = (n.name || '').trim();
                 if (!name) continue;
                 const norm = name.toLowerCase();
                 if (isBlocked(name, blocked)) continue;
-                if (contacts.some(c => c.name.toLowerCase() === norm)) continue;
+                const existing = contacts.find(c => c.name.toLowerCase() === norm);
+                if (existing) {
+                    // Already a contact — still capture about description if new
+                    const about = (n.about || '').trim();
+                    if (about && !(existing.memories || []).some(m => m.text === about.slice(0, 320))) {
+                        if (!existing.memories) existing.memories = [];
+                        existing.memories.push({
+                            text: about.slice(0, 320),
+                            ts: Date.now(),
+                            tags: ['introduction'],
+                        });
+                        totalAdded++;
+                        console.log(`[PhoneSocial] scan: added about-memory for existing contact "${name}"`);
+                    }
+                    continue;
+                }
                 contacts.push({
                     id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
                     name,
@@ -5251,6 +5643,23 @@ MANDATORY RULES — NO EXCEPTIONS:
             while ((m2 = speakerRe.exec(transcript)) !== null) {
                 transcriptSpeakers.add(m2[1].trim().toLowerCase());
             }
+            // Ensemble card detection: if the chat uses a single character card
+            // to write ALL NPCs (e.g. "Corey + Jay"), the Name: prefix is always
+            // the ensemble card — individual NPCs never appear as speakers.
+            // In this mode, accept memories for any NPC whose name appears in
+            // the transcript CONTENT (they're "spoken about" by the ensemble narrator).
+            const uniqueAiSpeakers = new Set();
+            if (ctx?.chat) {
+                for (const msg of ctx.chat) {
+                    if (!msg || msg.is_user || msg.is_system) continue;
+                    const spkr = (msg.name || '').trim().toLowerCase();
+                    if (spkr) uniqueAiSpeakers.add(spkr);
+                }
+            }
+            const isEnsembleCard = uniqueAiSpeakers.size === 1;
+            if (isEnsembleCard) {
+                console.log('[PhoneSocial] memories scan: ensemble card detected (' + [...uniqueAiSpeakers][0] + ') — relaxing speaker filter');
+            }
 
             // Add memories to existing contacts
             for (const m of mems) {
@@ -5259,9 +5668,24 @@ MANDATORY RULES — NO EXCEPTIONS:
                 const contact = contacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
                 if (!contact) continue;
                 // Hard omniscience filter: reject if NPC wasn't a speaker
-                if (!transcriptSpeakers.has(contactName.toLowerCase())) {
+                const nameLower = contactName.toLowerCase();
+                const isSpeaker = transcriptSpeakers.has(nameLower);
+                // Ensemble fallback: NPC name appears in transcript content
+                const isEnsembleMention = isEnsembleCard && transcript.toLowerCase().includes(nameLower);
+                if (!isSpeaker && !isEnsembleMention) {
                     console.log(`[PhoneSocial] scan: REJECTED memory for "${contactName}" — not a speaker in transcript (said behind their back)`);
                     continue;
+                }
+                // ── Quote verification: hallucination guard ──
+                const quote = (m.quote || '').trim();
+                if (quote.length >= 10) {
+                    // Check if the quote appears verbatim in the transcript
+                    const transcriptLower = transcript.toLowerCase();
+                    const quoteLower = quote.toLowerCase();
+                    if (!transcriptLower.includes(quoteLower)) {
+                        console.log(`[PhoneSocial] scan: REJECTED memory for "${contactName}" — quote not found in transcript (hallucination?): "${quote.slice(0, 80)}"`);
+                        continue;
+                    }
                 }
                 const memText = (m.text || '').trim();
                 if (!memText || memText.length < 15) continue;
@@ -5281,6 +5705,26 @@ MANDATORY RULES — NO EXCEPTIONS:
             if (totalAdded > 0) {
                 console.log(`[PhoneSocial] scan: +${totalAdded} items (NPCs + memories)`);
             }
+            // Per-contact breakdown: which contacts got memories?
+            const contactsWithMems = contacts.filter(c => Array.isArray(c.memories) && c.memories.length > 0);
+            console.log('[PhoneSocial] scan: contacts with memories: ' + (contactsWithMems.length ? contactsWithMems.map(c => c.name + '(' + c.memories.length + ')').join(', ') : 'NONE'));
+            // ── Ensemble card targeted post-scan ──
+            // When the chat uses an ensemble card like "Corey + Jay", the main
+            // scan treats them as the narrator and barely extracts memories.
+            // Run dedicated follow-up API calls for each ensemble part with
+            // low memory count, asking specifically about THAT character.
+            if (isEnsembleCard) {
+                const ensembleParts = (ctx.name2 || ctx.name || '').split(/[+,&]\s*/).map(p => p.trim().toLowerCase()).filter(p => p.length > 1);
+                const starvedParts = ensembleParts.filter(p => {
+                    const c = contacts.find(x => x.name.toLowerCase() === p);
+                    return c && (!Array.isArray(c.memories) || c.memories.length < 3);
+                });
+                if (starvedParts.length) {
+                    console.log('[PhoneSocial] scan: ensemble post-scan needed for: ' + starvedParts.join(', '));
+                    // Fire and forget — don't block the current scan
+                    setTimeout(() => targetedEnsembleScan(starvedParts, contacts, transcript, user, myName), 2000);
+                }
+            }
             // Always purge after extraction — NPCs the API finds may not be real senders
             try { purgeStaleContacts(); } catch (_) {}
             saveMeta();
@@ -5289,6 +5733,98 @@ MANDATORY RULES — NO EXCEPTIONS:
             console.warn('[PhoneSocial] memories scan parse failed:', e?.message || e, 'raw:', (text || '').slice(0, 200));
             return 0;
         }
+    }
+
+    // ─── Targeted ensemble post-scan ──────────────────────────────
+    // When the main scan barely finds memories for ensemble card NPCs
+    // (because "Corey + Jay" is treated as one narrator), this runs
+    // dedicated follow-up calls asking specifically about each NPC.
+    async function targetedEnsembleScan(starvedParts, contacts, transcript, user, myName) {
+        console.log('[PhoneSocial] targeted ensemble scan: starting for ' + starvedParts.join(', '));
+        for (const partName of starvedParts) {
+            try {
+                const contact = contacts.find(c => c.name.toLowerCase() === partName);
+                if (!contact) continue;
+                // Build a focused prompt — ask ONLY about this one character
+                const systemPrompt = `You are extracting memories about a specific character from a roleplay transcript.
+
+Character: ${partName}
+Source transcript: conversation between "${user}" and "${myName}" (an ensemble narrator card).
+
+Your ONLY job: Extract 2-4 specific, durable facts about ${partName} from the transcript below.
+
+Return ONLY valid JSON:
+{
+  "memories": [
+    { "text": "Specific fact about ${partName}...", "quote": "verbatim excerpt from transcript", "tags": ["personality"] }
+  ]
+}
+
+RULES:
+- Each memory: 1 sentence, 10-60 words, about ${partName} specifically.
+- Extract PERSONALITY traits, recent actions, relationships, or stated facts.
+- 🚫 ANTI-HALLUCINATION: NEVER invent dialogue, events, or details. Every memory MUST be traceable to the transcript. A blank memory is better than a fake one.
+- 📎 Include a "quote" field: a SHORT verbatim excerpt (5-15 words) from the transcript that PROVES this fact. Copy-paste it exactly.`;
+
+                const userPrompt = `Transcript:\n\n${transcript}\n\nExtract 2-4 memories about ${partName}.`;
+                
+                const text = await callTurboApi(systemPrompt, userPrompt);
+                if (!text) {
+                    console.log('[PhoneSocial] targeted scan for ' + partName + ': API returned empty');
+                    continue;
+                }
+                
+                // Parse response
+                const cleaned = String(text)
+                    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                    .replace(/```json\s*|```/g, '')
+                    .replace(/^[^{[]*/, '')
+                    .replace(/[^}\]]*$/, '')
+                    .trim();
+                
+                try {
+                    const obj = JSON.parse(cleaned);
+                    const mems = Array.isArray(obj?.memories) ? obj.memories : [];
+                    let added = 0;
+                    for (const m of mems) {
+                        const memText = (m.text || '').trim();
+                        if (!memText || memText.length < 15) continue;
+                        // Quote verification
+                        const quote = (m.quote || '').trim();
+                        if (quote.length >= 10) {
+                            const transcriptLower = transcript.toLowerCase();
+                            const quoteLower = quote.toLowerCase();
+                            if (!transcriptLower.includes(quoteLower)) {
+                                console.log(`[PhoneSocial] targeted scan: REJECTED memory for ${partName} — quote not in transcript: "${quote.slice(0, 80)}"`);
+                                continue;
+                            }
+                        }
+                        if (!contact.memories) contact.memories = [];
+                        const existing = new Set(contact.memories.map(x =>
+                            (x.text || '').toLowerCase().replace(/\s+/g, ' ').trim()));
+                        const key = memText.toLowerCase().replace(/\s+/g, ' ').trim();
+                        if (existing.has(key)) continue;
+                        contact.memories.push({
+                            text: memText.slice(0, 320),
+                            ts: Date.now(),
+                            tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean).slice(0, 6) : [],
+                        });
+                        added++;
+                    }
+                    if (added > 0) {
+                        console.log(`[PhoneSocial] targeted scan for ${partName}: +${added} memories`);
+                    } else {
+                        console.log(`[PhoneSocial] targeted scan for ${partName}: 0 memories returned`);
+                    }
+                } catch (e) {
+                    console.warn('[PhoneSocial] targeted scan parse failed for ' + partName + ':', e?.message || e);
+                }
+            } catch (e) {
+                console.warn('[PhoneSocial] targeted scan failed for ' + partName + ':', e?.message || e);
+            }
+        }
+        saveMeta();
+        console.log('[PhoneSocial] targeted ensemble scan: complete');
     }
 
     // ─── Chirp Feed Generator ─────────────────────────────────────────
@@ -5767,6 +6303,47 @@ Rules:
         return getMonday().getTime() > new Date(schedule.weekStart).getTime();
     }
 
+    // ── Auto-refresh schedules on new messages ──
+    // When an AI message mentions NPCs, regenerate their schedules so they
+    // stay current with story events. Cooldown prevents per-message spam.
+    let _scheduleRegenCooldown = {};  // { contactName: timestamp }
+    const SCHEDULE_REGEN_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    function autoRefreshSchedules() {
+        try {
+            const ctx = getCtx();
+            const chat = ctx?.chat;
+            if (!Array.isArray(chat) || !chat.length) return;
+            const last = chat[chat.length - 1];
+            if (!last || last.is_user) return; // Only AI messages trigger refresh
+            const content = ((last.mes || last.text || '')).toLowerCase();
+            if (!content) return;
+            const now = Date.now();
+            const toRegen = [];
+            for (const c of state.contacts) {
+                if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
+                if (!c.schedule || !c.schedule.days) continue; // No schedule to refresh
+                const nameLower = c.name.toLowerCase();
+                // Word-boundary match to avoid "Gaz" matching "gaze"
+                const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const re = new RegExp('\\b' + escaped + '\\b');
+                if (!re.test(content)) continue;
+                // Cooldown check
+                const lastRegen = _scheduleRegenCooldown[c.name] || 0;
+                if (now - lastRegen < SCHEDULE_REGEN_COOLDOWN_MS) continue;
+                toRegen.push(c);
+            }
+            if (!toRegen.length) return;
+            console.log('[PhoneSocial] 🔄 auto-refreshing schedules for: ' + toRegen.map(c => c.name).join(', '));
+            // Stagger: one every 3s to avoid rate limits
+            let delay = 1000;
+            for (const c of toRegen) {
+                _scheduleRegenCooldown[c.name] = now;
+                setTimeout(() => generateSchedule(c.id), delay);
+                delay += 3000;
+            }
+        } catch (_) {}
+    }
+
     function parseScheduleResponse(content) {
         let jsonStr = String(content || '').trim();
         const mdMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -5818,8 +6395,34 @@ Rules:
         let charDesc = '';
         let charPersonality = '';
         if (ctx?.characters) {
-            const match = ctx.characters.find(ch => ch && ch.name && ch.name.toLowerCase() === charName.toLowerCase());
-            if (match?.data) {
+            let match = ctx.characters.find(ch => ch && ch.name && ch.name.toLowerCase() === charName.toLowerCase());
+            // ── Ensemble card fallback: when NPCs don't have individual cards,
+            // pull from the main character (the ensemble card that writes
+            // everyone's dialogue). Extract only the lines mentioning this NPC.
+            if (!match) {
+                const mainChar = ctx.characters.find(ch => ch && ch.name && !ch.name.toLowerCase().includes('user'));
+                if (mainChar?.data) {
+                    const fullDesc = (mainChar.data.description || '').trim();
+                    const fullPersonality = (mainChar.data.personality || '').trim();
+                    const nameEscaped = charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const nameRe = new RegExp('[^.]*\\b' + nameEscaped + '\\b[^.]*\\.', 'gi');
+                    // Extract sentences mentioning this NPC from description
+                    const descMatches = fullDesc.match(nameRe) || [];
+                    if (descMatches.length) {
+                        charDesc = descMatches.join(' ').slice(0, 800);
+                    } else if (fullDesc) {
+                        // No specific mention — use first 800 chars of full description
+                        charDesc = fullDesc.slice(0, 800);
+                    }
+                    // Same for personality
+                    const personalityMatches = fullPersonality.match(nameRe) || [];
+                    if (personalityMatches.length) {
+                        charPersonality = personalityMatches.join(' ').slice(0, 500);
+                    } else if (fullPersonality) {
+                        charPersonality = fullPersonality.slice(0, 500);
+                    }
+                }
+            } else if (match?.data) {
                 charDesc = (match.data.description || '').trim().slice(0, 800);
                 charPersonality = (match.data.personality || '').trim().slice(0, 500);
             }
@@ -5834,16 +6437,55 @@ Rules:
             continuity = '\n\nRecent continuity:\nThis character had the following schedule last week. Use it to maintain consistency:\n' +
                 prevBlocks.join('\n') + '\nIf recent events changed their job, school, health, relationships, or obligations, reflect those changes. Otherwise preserve their established routine.';
         }
+        // ── Cross-reference: other NPCs' schedules (compact — only relevant blocks) ──
+        let crossRef = '';
+        const otherContacts = state.contacts.filter(c => c.id !== contactId && c.schedule && c.schedule.days);
+        if (otherContacts.length) {
+            const conflicts = [];
+            const nameEscaped = charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const nameRe = new RegExp('\\b' + nameEscaped + '\\b', 'i');
+            for (const oc of otherContacts) {
+                const mentions = [];
+                for (const day of DAYS) {
+                    const b = oc.schedule.days[day];
+                    if (!Array.isArray(b)) continue;
+                    for (const block of b) {
+                        if (nameRe.test(block.activity || '')) {
+                            mentions.push(day + ' ' + block.time + ': ' + block.activity + ' [' + block.status + ']');
+                        }
+                    }
+                }
+                if (mentions.length) {
+                    conflicts.push(oc.name + ' expects to be with ' + charName + ' at:\n  ' + mentions.join('\n  '));
+                }
+            }
+            if (conflicts.length) {
+                crossRef = '\n\n⚠️ CROSS-REFERENCE — other characters expect to interact with ' + charName + ':\n' +
+                    conflicts.join('\n\n') + '\n\n' +
+                    '⛔ MANDATORY: ' + charName + ' MUST be available and online during EVERY time block listed above. ' +
+                    'These are specific commitments other characters have already made. ' +
+                    'Your schedule MUST align — same time, same activity, compatible status (online or dnd, NOT offline).';
+                console.log('[PhoneSocial] generateSchedule crossRef for ' + charName + ': ' + conflicts.length + ' other NPC(s) expect interaction');
+            } else {
+                console.log('[PhoneSocial] generateSchedule crossRef for ' + charName + ': no other NPCs mention them');
+            }
+        }
         // ── Build rich story evidence: NPC's own lines + surrounding scene context ──
         let storyContext = '';
         if (ctx?.chat) {
             const nameLower = charName.toLowerCase();
-            const recentMsgs = ctx.chat.slice(-60).filter(m => m && !m.is_system);
+            // NO is_system filter — in many chats, character messages are
+            // marked system (world info, summaries, extension injections).
+            // This would silently discard all NPC dialogue, making the AI
+            // think the NPC hasn't spoken at all.
+            const recentMsgs = ctx.chat.slice(-60).filter(m => !!m);
             // Collect NPC's own messages AND the lines immediately around them for scene context
             const sceneSnapshots = [];
+            let sceneCollectDebug = [];
             for (let i = 0; i < recentMsgs.length; i++) {
                 const m = recentMsgs[i];
                 const speaker = (m.name || '').toLowerCase();
+                sceneCollectDebug.push(speaker || '?');
                 if (speaker === nameLower) {
                     const before = recentMsgs[i - 1];
                     const after = recentMsgs[i + 1];
@@ -5854,6 +6496,27 @@ Rules:
                     }
                     sceneSnapshots.push(snapshot);
                 }
+            }
+            console.log('[PhoneSocial] generateSchedule scene evidence for ' + charName + ': ' + sceneSnapshots.length + ' snapshots from ' + recentMsgs.length + ' msgs. Speakers: ' + [...new Set(sceneCollectDebug)].join(', '));
+            // ── Ensemble card support: when NPCs are written through a single
+            // character card (e.g. "COD: Task Force RPG"), individual NPC names
+            // never appear as speakers. Scan the AI's narration messages for
+            // lines that mention this NPC by name — treat them as pseudo-dialogue.
+            if (!sceneSnapshots.length) {
+                const nameRegex = new RegExp('\\b' + nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+                const aiMsgs = ctx.chat.slice(-40).filter(m => !!m && !m.is_user);
+                for (const m of aiMsgs) {
+                    const content = (m.mes || m.text || '');
+                    if (nameRegex.test(content)) {
+                        // Extract the sentences around the name mention for focused context
+                        const sentences = content.split(/(?<=[.!?])\s+/);
+                        const relevant = sentences.filter(s => nameRegex.test(s)).join(' ').slice(0, 400);
+                        if (relevant) {
+                            sceneSnapshots.push('[AI Narration mentioning ' + charName + ']\n' + relevant);
+                        }
+                    }
+                }
+                console.log('[PhoneSocial] generateSchedule ensemble fallback for ' + charName + ': ' + sceneSnapshots.length + ' narration snapshots from ' + aiMsgs.length + ' AI msgs');
             }
             // Collect NPC memories as additional evidence
             let memoryContext = '';
@@ -5872,9 +6535,20 @@ Rules:
                     '3. Use SPECIFIC activities tailored to this character. Never use generic "work" or "sleeping" alone — use "patrolling the east ward", "barista shift at The Daily Grind", "studying for the bar exam", "feeding the horses at dawn".\n' +
                     '4. INFER from personality, backstory, and the character card. A musician practices. A student has classes. A parent has childcare. A werewolf transforms at night. Fill in what the chat doesn\'t show.\n' +
                     '5. Make it BELIEVABLE — the schedule should feel like a real person\'s weekly routine, with variety across days, realistic downtime, and activities that match who they are.';
-            } else if (memoryContext) {
-                storyContext = memoryContext +
-                    '\n\nBuild a complete weekly schedule for this character based on their personality and known facts. They have their own independent life.';
+            } else {
+                // Fallback: NPC hasn't spoken recently, but give the AI the recent
+                // scene to prove the scene IS active at the current hour. Without
+                // this the AI defaults to "midnight = sleep" for every NPC.
+                const fallbackMsgs = recentMsgs.slice(-8);
+                if (fallbackMsgs.length) {
+                    storyContext = '\n\nCurrent scene (character is present in this scene right now, even though they haven\'t spoken yet — they are ACTIVE and AWAKE):\n' +
+                        fallbackMsgs.map(m => '[' + (m.name || 'Someone') + '] ' + ((m.mes || m.text || '').trim().slice(0, 200))).join('\n\n') +
+                        memoryContext +
+                        '\n\nThis character IS in this scene. They are AWAKE and participating. Build their schedule to reflect that they are active at this hour.';
+                } else if (memoryContext) {
+                    storyContext = memoryContext +
+                        '\n\nBuild a complete weekly schedule for this character based on their personality and known facts. They have their own independent life.';
+                }
             }
         }
         const systemPrompt = [
@@ -5883,12 +6557,16 @@ Rules:
             'Character: ' + charName,
             'Description: ' + (charDesc || '(no description available)'),
             'Personality: ' + (charPersonality || '(no personality info)'),
+            '',
+            (() => { try { const t = getChatTime(); const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']; const h = t.getHours(); const m = String(t.getMinutes()).padStart(2,'0'); const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12; const day = days[t.getDay()]; return '📅 Current story time: ' + day + ' ' + h12 + ':' + m + ' ' + ampm + ' (use as reference for the schedule).'; } catch(_) { return ''; }})(),
             continuity,
+            crossRef,
             storyContext,
             '',
-            '⛔ CORE PRINCIPLE: This character has their OWN life. They exist independently of the user.',
-            'They have a job, hobbies, routines, friends, and responsibilities that continue even when not shown in the chat.',
-            'The schedule must reflect THEIR life — not just when they interact with the user.',
+            '⛔ CORE PRINCIPLE: Build this character\'s INDEPENDENT weekly life.',
+            'They have their own job, hobbies, routines, friends, and responsibilities that exist regardless of the user.',
+            'The schedule should reflect who they ARE — a soldier trains, a student studies, a parent has childcare.',
+            'Use their personality, backstory, and description to infer their daily routines.',
             '',
             'Generate a complete schedule for each day (Monday through Sunday). Every day must cover the full 24 hours.',
             'Use SPECIFIC, CHARACTER-TAILORED activities. Examples:',
@@ -5896,7 +6574,6 @@ Rules:
             '- "barista shift at The Daily Grind" (not just "work")',
             '- "studying for the bar exam at the library" (not just "studying")',
             '- "feeding the horses and mucking stalls" (not just "chores")',
-            '- "deep sleep — dead to the world" (not just "sleeping")',
             '',
             'Each time block must include a "status" field:',
             '- "online": awake and available (free time, socializing, casual activities)',
@@ -5917,8 +6594,8 @@ Rules:
             '  "inactivityThresholdMinutes": 45,',
             '  "days": {',
             '    "Monday": [',
-            '      {"time":"00:00-07:00","activity":"sleeping","status":"offline"},',
-            '      {"time":"07:00-08:00","activity":"morning routine","status":"idle"},',
+            '      {"time":"06:00-08:00","activity":"waking up and morning routine","status":"idle"},',
+            '      {"time":"08:00-12:00","activity":"at work","status":"dnd"},',
             '      ...',
             '    ],',
             '    "Tuesday": [...],',
@@ -5943,7 +6620,67 @@ Rules:
         }
         saveMeta();
         console.log('[PhoneSocial] schedule generated for ' + contact.name + ' (talk=' + schedule.talkativeness + ', threshold=' + schedule.inactivityThresholdMinutes + 'min)');
+        // ── Cascade: auto-regenerate NPCs mentioned in this new schedule ──
+        // When Horangi says "hanging out with Ghost at 10 PM," Ghost's schedule
+        // must be updated so Ghost knows he's with Horangi, not on recon.
+        scheduleCascade(contact, schedule);
         return schedule;
+    }
+
+    // ── Cascade regeneration ──
+    // When Horangi's new schedule says "hanging out with Ghost at 10 PM,"
+    // auto-regenerate Ghost so Ghost sees Horangi's updated schedule and
+    // stops thinking he's on a stealth recon mission at that time.
+    // Depth limit: 2 levels (A→B→C, but C won't cascade further).
+    // Cycle guard: tracks visited NPCs to avoid A→B→A ping-pong.
+    let _cascadeVisited = new Set();
+    function scheduleCascade(sourceContact, sourceSchedule, depth = 0) {
+        if (depth >= 2) return;
+        const srcName = sourceContact.name;
+        _cascadeVisited.add(srcName);
+        // Scan all time blocks for mentions of other NPCs
+        const mentioned = new Set();
+        const allActivities = [];
+        const days = sourceSchedule.days;
+        if (!days) return;
+        for (const day of Object.keys(days)) {
+            const blocks = days[day];
+            if (!Array.isArray(blocks)) continue;
+            for (const b of blocks) {
+                allActivities.push((b.activity || '').toLowerCase());
+            }
+        }
+        // Check each other contact's name against the accumulated activities
+        for (const c of state.contacts) {
+            if (c.id === sourceContact.id) continue;
+            if (_cascadeVisited.has(c.name)) continue;
+            if (c.source === 'st-character' || c.source === 'st-group') continue;
+            // Only cascade if the other NPC has an existing schedule (to update)
+            if (!c.schedule || !c.schedule.days) continue;
+            const nameLower = c.name.toLowerCase();
+            const fullText = allActivities.join(' ');
+            if (fullText.includes(nameLower)) {
+                mentioned.add(c);
+            }
+        }
+        if (!mentioned.size) return;
+        console.log('[PhoneSocial] 🔄 cascade: ' + srcName + ' mentions ' + [...mentioned].map(c => c.name).join(', ') + ' — regenerating them (depth ' + depth + ')');
+        // Regenerate each mentioned NPC after a short delay
+        let delay = 2000;
+        for (const c of mentioned) {
+            setTimeout(() => {
+                _cascadeVisited.add(c.name);
+                generateSchedule(c.id);
+            }, delay);
+            delay += 3000; // stagger to avoid rate limits
+        }
+        // Clean up visited set after cascade completes
+        setTimeout(() => {
+            for (const c of mentioned) {
+                _cascadeVisited.delete(c.name);
+            }
+            _cascadeVisited.delete(srcName);
+        }, delay + 5000);
     }
 
     function renderScheduleSection(contact) {
@@ -5958,8 +6695,10 @@ Rules:
         const s = contact.schedule;
         const stale = scheduleNeedsRefresh(s);
         const now = getCurrentScheduleStatus(s);
-        // ── In-scene override: if NPC is actively in the chat, they're with you ──
-        const inScene = isNpcPresent(contact.name);
+        // ── In-scene override: speaker-only — green banner only for NPCs
+        // who actually have speaking lines. Narration mentions from ensemble
+        // cards are used for proactive blocking, not the green banner.
+        const inScene = isNpcPresent(contact.name, {narration: false});
         const displayStatus = inScene ? 'online' : (now ? now.status : 'online');
         const displayActivity = inScene ? 'with you right now' : (now ? now.activity : 'unknown');
         const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
@@ -6016,7 +6755,16 @@ Rules:
         for (const msg of ctx.chat) {
             if (!msg) continue;
             const name = (msg.name || '').trim().toLowerCase();
-            if (name) chatSenders.add(name);
+            if (!name) continue;
+            chatSenders.add(name);
+            // Ensemble card support: split compound names like "corey + jay"
+            // so individual NPCs (corey, jay) are recognized as senders
+            if (/[+,&]/.test(name)) {
+                for (const part of name.split(/[+,&]\s*/)) {
+                    const p = part.trim().toLowerCase();
+                    if (p.length > 1) chatSenders.add(p);
+                }
+            }
         }
         const before = state.contacts.length;
         state.contacts = state.contacts.filter(c => {
@@ -6117,6 +6865,13 @@ Rules:
                     harvestNPCs();
                     purgeStaleContacts();
                     saveMeta();
+                    // ── Auto-refresh schedules when NPCs appear in new messages ──
+                    autoRefreshSchedules();
+                    // ── Narrative-triggered proactive check ──
+                    // Scan latest AI message for cues like "your phone's blowing up"
+                    // and immediately fire calls/texts from implicated NPCs.
+                    // Fires on 1s delay so the AI message is fully in ctx.chat.
+                    setTimeout(() => { checkNarrativeTriggers(); }, 1000);
                 } catch (e) {
                     console.error('[PhoneSocial] MESSAGE_RECEIVED error:', e);
                 }
