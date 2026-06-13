@@ -4706,18 +4706,16 @@ function viewAlbums() {
             }
             // Pass 2: ensemble card detection — when all NPCs are written through
             // a single character card (e.g. "COD: Task Force RPG"), individual NPCs
-            // never appear as speakers. Scan only the MOST RECENT AI message for
-            // NPC name mentions. The AI's latest narration describes what's happening
-            // RIGHT NOW — if an NPC isn't in the latest message, they've likely
-            // left the scene (or are elsewhere). This prevents flagging all squad
-            // members as present when the AI describes everyone across messages.
+            // never appear as speakers. Scan the last 5 AI messages for NPC name
+            // mentions — ensemble AI narration often rotates focus between characters,
+            // so a single message misses NPCs who are clearly still present on-scene.
             if (useNarration) {
                 const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const wordBoundary = new RegExp('\\b' + escaped + '\\b');
-                // Only the single most recent AI message — this is the current scene.
-                const latestAi = [...ctx.chat].reverse().find(m => !!m && !m.is_user);
-                if (latestAi) {
-                    const content = (latestAi.mes || latestAi.text || '').toLowerCase();
+                // Last 5 AI messages — covers the full narrative context window.
+                const aiMsgs = [...ctx.chat].reverse().filter(m => !!m && !m.is_user && !m.is_system).slice(0, 5);
+                for (const m of aiMsgs) {
+                    const content = (m.mes || m.text || '').toLowerCase();
                     if (wordBoundary.test(content)) return true;
                 }
             }
@@ -4740,114 +4738,6 @@ function viewAlbums() {
             }
         } catch (_) {}
         return false;
-    }
-
-    // Scans recent main chat for story beats that warrant a proactive message.
-    // Returns {type, intensity} or null if nothing significant happened.
-    // STRICT RULES:
-    // ─── Narrative-triggered proactive check ──────────────────────────
-    // Scans the latest AI message body for cues that NPCs are trying to
-    // contact the user — "your phone's blowing up", "Mom's been texting you", etc.
-    // Bypasses the speaker-history gates (hasAppearedInChat, detectStoryTrigger
-    // speaker requirement) because the AI narration IS the evidence.
-    // Called from MESSAGE_RECEIVED hook, so it fires immediately after each
-    // AI response rather than waiting for the 45-second proactive timer.
-    function checkNarrativeTriggers() {
-        try {
-            const ctx = getCtx();
-            if (!ctx?.chat || !state.settings.autoReplies || state.userDnd) return;
-            // Only trigger on AI messages (not user messages)
-            const latest = ctx.chat[ctx.chat.length - 1];
-            if (!latest || latest.is_user || latest.is_system) return;
-            const text = (latest.mes || latest.text || '').toLowerCase();
-            if (!text) return;
-
-            // ── Pattern 1: Generic phone-buzzing cues ──
-            const phoneCues = [
-                /blowing up your phone/i, /phone (?:keeps|has been|is) (?:buzzing|vibrating|ringing)/i,
-                /phone (?:going|has been going) off/i, /blowing up/i,
-                /missed (?:a |some |)(?:call|text|message)/i,
-                /trying to (?:reach|call|get ahold of|get hold of) you/i,
-                /been (?:trying to |)(?:call|text|message|reach) you/i,
-                /(?:called|texted|messaged) you/i, /left you a (?:voicemail|message|text)/i,
-                /(?:check|look at) your phone/i, /phone (?:rang|went off)/i,
-            ];
-            let genericTrigger = false;
-            for (const cue of phoneCues) {
-                if (cue.test(text)) { genericTrigger = true; break; }
-            }
-
-            // ── Pattern 2: Contact name near a communication verb ──
-            const comVerbs = /(?:text(?:ing|ed|s)?|call(?:ing|ed|s)?|messag(?:ing|ed|es)?|reach(?:ing|ed)?\s*out|voicemail|phone|buzz(?:ing|ed)?|ring(?:ing|s)?)/i;
-
-            if (!genericTrigger && !comVerbs.test(text)) return;
-
-            // ── Find eligible non-present contacts ──
-            const nonPresent = [];
-            for (const c of state.contacts) {
-                if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
-                if (isNpcPresent(c.name)) continue;
-                // Skip if they texted recently (2-min window)
-                const thread = state.threads[c.id];
-                if (Array.isArray(thread) && thread.length) {
-                    const last = thread[thread.length - 1];
-                    if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 120000) continue;
-                }
-                nonPresent.push(c);
-            }
-            if (!nonPresent.length) return;
-
-            // ── Identify implicated contacts ──
-            const implicated = [];
-            // Pass 1: Contact name near a communication verb
-            for (const c of nonPresent) {
-                const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const nameRe = new RegExp('\\b' + escaped.toLowerCase() + '\\b', 'i');
-                if (!nameRe.test(text)) continue;
-                // Check if the name appears near a communication verb (±80 chars)
-                const idx = text.indexOf(c.name.toLowerCase());
-                const surround = text.slice(Math.max(0, idx - 80), Math.min(text.length, idx + c.name.length + 80));
-                if (comVerbs.test(surround)) {
-                    implicated.push(c);
-                }
-            }
-            // Pass 2: Generic trigger + name mention (looser)
-            if (!implicated.length && genericTrigger) {
-                for (const c of nonPresent) {
-                    const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    if (new RegExp('\\b' + escaped.toLowerCase() + '\\b', 'i').test(text)) {
-                        implicated.push(c);
-                    }
-                }
-            }
-            // Pass 3: Generic trigger with no names — grab up to 2 random eligible contacts
-            if (!implicated.length && genericTrigger) {
-                const shuffled = [...nonPresent].sort(() => Math.random() - 0.5);
-                implicated.push(...shuffled.slice(0, 2));
-            }
-            if (!implicated.length) return;
-
-            console.log('[PhoneSocial] 📖 narrative trigger: "' + text.slice(0, 100) + '..." → ' + implicated.map(c => c.name).join(', '));
-
-            // ── Fire up to 2 contacts with 3s stagger ──
-            const toFire = implicated.slice(0, 2);
-            toFire.forEach((c, i) => {
-                setTimeout(() => {
-                    if (isNpcPresent(c.name)) return; // Re-check presence
-                    c._lastProactiveTime = Date.now();
-                    const personality = inferPersonality(c);
-                    const shouldCall = personality.prefersCall || Math.random() < 0.25;
-                    console.log('[PhoneSocial] 📖 narrative fire: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text'));
-                    if (shouldCall) {
-                        simulateIncomingCall(c);
-                    } else {
-                        simulateProactiveText(c, null);
-                    }
-                }, i * 3000);
-            });
-        } catch (e) {
-            console.warn('[PhoneSocial] checkNarrativeTriggers error:', e);
-        }
     }
 
     // Scans recent main chat for story beats that warrant a proactive message.
@@ -5024,7 +4914,7 @@ function viewAlbums() {
         try {
             const ctx = getCtx();
             if (ctx?.chat) {
-                const tail = ctx.chat.slice(-3).filter(m => !!m);
+                const tail = ctx.chat.slice(-3).filter(m => !!m && !m.is_system);
                 const sample = tail.map(m =>
                     '[' + (m.name || '?') + (m.is_system ? '/sys' : '') + (m.is_user ? '/user' : '') + '] ' +
                     ((m.mes || m.text || '').slice(0, 100))
@@ -5488,8 +5378,6 @@ Rules:
                     quietPrompt: fullPrompt,
                     quietToLoud: false,
                     skipWIAN: true,
-                    responseLength: 500,
-                    trimToSentence: false,
                 });
                 console.log('[PhoneSocial] turbo: ST fallback got reply:', reply?.slice(0, 80));
                 return reply;
