@@ -1,0 +1,21 @@
+# Build output (concatenated by build.sh)
+# index.js is kept tracked for ST direct-serving, but listed here as documentation
+# that it's a generated artifact from src/
+
+# Editor / OS
+*.swp
+*.swo
+*~
+*.bak
+.DS_Store
+Thumbs.db
+
+# Node / npm (if ever added)
+node_modules/
+package-lock.json
+
+# Hermes session artifacts
+.hermes/
+
+# Diagnostic / temp
+*.log
