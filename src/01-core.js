@@ -52,6 +52,10 @@ function cleanThreads(threads) {
             meta.chirpLastRefresh = state.chirpLastRefresh || 0;
             meta.lastUserMessageAt = state.lastUserMessageAt || 0;
             meta.userDnd = state.userDnd || false;
+            meta.mutedContacts = state.mutedContacts || {};
+            meta.scheduleSelectedDay = state.scheduleSelectedDay || null;
+            meta.ttsVoices = Array.isArray(state.ttsVoices) ? state.ttsVoices : [];
+            meta.ttsVoicesFetched = state.ttsVoicesFetched || 0;
             try { ctx?.saveMetadata?.(); } catch (_e1) {
                 setTimeout(() => { try { ctx?.saveMetadata?.(); } catch (_e2) {} }, 200);
             }
@@ -78,6 +82,10 @@ function cleanThreads(threads) {
             chirpLastRefresh: state.chirpLastRefresh || 0,
             lastUserMessageAt: state.lastUserMessageAt || 0,
             userDnd: state.userDnd || false,
+            mutedContacts: state.mutedContacts || {},
+            scheduleSelectedDay: state.scheduleSelectedDay || null,
+            ttsVoices: Array.isArray(state.ttsVoices) ? state.ttsVoices : [],
+            ttsVoicesFetched: state.ttsVoicesFetched || 0,
         };
         // ST extensionSettings path
         if (ctx?.extensionSettings) {
@@ -161,6 +169,10 @@ function cleanThreads(threads) {
                     }
                     if (typeof backup.lastUserMessageAt === 'number') state.lastUserMessageAt = backup.lastUserMessageAt;
                     if (typeof backup.userDnd === 'boolean') state.userDnd = backup.userDnd;
+                    if (backup.mutedContacts && typeof backup.mutedContacts === 'object') state.mutedContacts = backup.mutedContacts;
+                    if (typeof backup.scheduleSelectedDay === 'string' || backup.scheduleSelectedDay === null) state.scheduleSelectedDay = backup.scheduleSelectedDay;
+                    if (Array.isArray(backup.ttsVoices)) state.ttsVoices = backup.ttsVoices;
+                    if (typeof backup.ttsVoicesFetched === 'number') state.ttsVoicesFetched = backup.ttsVoicesFetched;
                     loadedFromLocal = true;
                 }
             }
@@ -203,6 +215,10 @@ function cleanThreads(threads) {
             }
             if (typeof meta.lastUserMessageAt === 'number') state.lastUserMessageAt = meta.lastUserMessageAt;
             if (typeof meta.userDnd === 'boolean') state.userDnd = meta.userDnd;
+            if (meta.mutedContacts && typeof meta.mutedContacts === 'object') state.mutedContacts = meta.mutedContacts;
+            if (typeof meta.scheduleSelectedDay === 'string' || meta.scheduleSelectedDay === null) state.scheduleSelectedDay = meta.scheduleSelectedDay;
+            if (Array.isArray(meta.ttsVoices)) state.ttsVoices = meta.ttsVoices;
+            if (typeof meta.ttsVoicesFetched === 'number') state.ttsVoicesFetched = meta.ttsVoicesFetched;
         }
         // If still no contacts, try extensionSettings backup (skip localStorage — already tried)
         if (!loadedFromLocal && (!state.contacts.length || !Object.keys(state.threads).length)) {

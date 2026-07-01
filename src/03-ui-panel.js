@@ -847,11 +847,75 @@
             #phonesocial-panel .ps-msg-time.me { text-align:right; }
             #phonesocial-panel .ps-msg-time.them { text-align:left; }
             /* ─── Read Receipts ─── */
-            #phonesocial-panel .ps-receipt {
+            #phonesocial-panel .ps-msg-receipt {
                 font-size:10px; color:#8e8e93;
-                align-self:flex-end; margin-right:8px; margin-bottom:6px;
+                display:block; text-align:right;
+                margin:0 8px 6px 0;
             }
-            #phonesocial-panel .ps-receipt.ps-seen { color:#007aff; }
+            #phonesocial-panel .ps-msg-receipt.ps-read { color:#007aff; }
+            /* ─── Schedule Display ─── */
+            #phonesocial-panel .ps-schedule-status-card {
+                display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+                background:#f2f2f7; border-radius:10px; padding:10px; margin-bottom:10px;
+            }
+            #phonesocial-panel .ps-schedule-status-icon { font-size:18px; }
+            #phonesocial-panel .ps-schedule-status-label { font-size:12px; font-weight:600; color:#1c1c1e; }
+            #phonesocial-panel .ps-schedule-talk-bar {
+                flex-basis:100%; height:4px; background:#e5e5ea; border-radius:2px; overflow:hidden;
+            }
+            #phonesocial-panel .ps-schedule-talk-fill {
+                height:100%; background:#007aff; border-radius:2px; transition:width 0.3s;
+            }
+            #phonesocial-panel .ps-schedule-pills {
+                display:flex; gap:4px; overflow-x:auto; padding:4px 0 8px;
+                -webkit-overflow-scrolling:touch; scrollbar-width:none;
+            }
+            #phonesocial-panel .ps-schedule-pills::-webkit-scrollbar { display:none; }
+            #phonesocial-panel .ps-schedule-pill {
+                flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:2px;
+                padding:6px 10px; border-radius:10px; border:1.5px solid #d1d1d6;
+                background:#fff; cursor:pointer; font-size:12px; color:#1c1c1e; min-width:44px;
+            }
+            #phonesocial-panel .ps-schedule-pill-sel {
+                background:#007aff; color:#fff; border-color:#007aff;
+            }
+            #phonesocial-panel .ps-schedule-pill-today:not(.ps-schedule-pill-sel) {
+                border-color:#007aff; border-width:2px;
+            }
+            #phonesocial-panel .ps-schedule-pill-dots {
+                display:flex; gap:1px; flex-wrap:wrap; justify-content:center; max-width:32px;
+            }
+            #phonesocial-panel .ps-schedule-blocks {
+                position:relative; display:flex; flex-direction:column; gap:2px;
+                max-height:240px; overflow-y:auto;
+            }
+            #phonesocial-panel .ps-schedule-block {
+                display:flex; align-items:center; gap:8px; padding:6px 8px;
+                background:#f9f9fb; border-radius:8px; font-size:12px;
+            }
+            #phonesocial-panel .ps-schedule-block-time {
+                font-family:monospace; font-size:11px; color:#8e8e93; min-width:88px;
+            }
+            #phonesocial-panel .ps-schedule-block-dot {
+                width:8px; height:8px; border-radius:50%; flex-shrink:0;
+            }
+            #phonesocial-panel .ps-schedule-block-activity {
+                flex:1; color:#1c1c1e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            }
+            #phonesocial-panel .ps-schedule-block-status {
+                font-size:10px; padding:2px 6px; border-radius:4px; background:#e5e5ea; color:#3a3a3c;
+                text-transform:uppercase; font-weight:600;
+            }
+            #phonesocial-panel .ps-schedule-now {
+                position:absolute; left:0; right:0; z-index:2; pointer-events:none;
+            }
+            #phonesocial-panel .ps-schedule-now::before {
+                content:''; display:block; height:2px; background:#007aff;
+            }
+            #phonesocial-panel .ps-schedule-now span {
+                position:absolute; right:4px; top:-10px;
+                font-size:10px; color:#007aff; font-weight:600; white-space:nowrap;
+            }
             /* ─── Date Dividers ─── */
             #phonesocial-panel .ps-date-divider {
                 text-align:center; font-size:11px; color:#8e8e93;

@@ -206,6 +206,7 @@
                     // narration-aware presence check would see the cue's own name mention
                     // and incorrectly block the intended trigger.
                     if (isNpcPresent(c.name, { narration: false })) continue;
+                    if (state.mutedContacts[c.id]) continue;
                     if (hasRecent(c)) continue;
                     if (alreadyTriggered.has(c.id)) continue;
 
@@ -237,6 +238,7 @@
                         if (!c.id || !c.name) continue;
                         if (c.source === 'st-character' || c.source === 'st-group') continue;
                         if (isNpcPresent(c.name)) continue;
+                        if (state.mutedContacts[c.id]) continue;
                         if (hasRecent(c)) continue;
                         candidates.push(c);
                     }
@@ -404,6 +406,76 @@
             }
         } catch (e) {
             console.warn('[PhoneSocial] ingestInlineSMS error:', e);
+        }
+    }
+
+    // ─── Inline SMS Reply from Main Chat ────────────────────────────
+    // Detects `/text <Contact Name> <message>` in user messages and pushes
+    // the message into the contact's thread as a user SMS reply.
+    // Contact matching is longest-name-first to handle multi-word names.
+    function handleInlineSMSReply(userText) {
+        try {
+            const prefix = '/text ';
+            if (!userText || !userText.startsWith(prefix)) return;
+            const rest = userText.slice(prefix.length).trim();
+            if (!rest) return;
+
+            // Longest-name-first matching (case-insensitive)
+            let bestContact = null;
+            let bestMatchLen = 0;
+            const lowerRest = rest.toLowerCase();
+            for (const c of state.contacts) {
+                const lowerName = c.name.toLowerCase();
+                if (lowerRest.startsWith(lowerName)) {
+                    const nameLen = c.name.length;
+                    const nextChar = rest[nameLen];
+                    // Require word boundary: space, end-of-string, or newline
+                    if (nextChar === ' ' || nextChar === undefined || nextChar === '\n') {
+                        if (nameLen > bestMatchLen) {
+                            bestMatchLen = nameLen;
+                            bestContact = c;
+                        }
+                    }
+                }
+            }
+
+            if (!bestContact) {
+                console.log('[PhoneSocial] 📱 inline SMS reply: no contact matched from "' +
+                    rest.slice(0, 30) + '"');
+                if (typeof toastr !== 'undefined') {
+                    toastr.warning('Contact not found. Use /text <Contact Name> <message>', 'PhoneSocial');
+                }
+                return;
+            }
+
+            const msgText = rest.slice(bestMatchLen).trim();
+            if (!msgText) {
+                console.log('[PhoneSocial] 📱 inline SMS reply: empty message after contact name');
+                if (typeof toastr !== 'undefined') {
+                    toastr.warning('No message text after contact name.', 'PhoneSocial');
+                }
+                return;
+            }
+
+            // Push to thread
+            if (!state.threads[bestContact.id]) state.threads[bestContact.id] = [];
+            state.threads[bestContact.id].push({
+                from: 'me',
+                text: msgText,
+                ts: Date.now(),
+                seen: false
+            });
+
+            saveMeta();
+            updateSmsInjection();
+
+            if (typeof toastr !== 'undefined') {
+                toastr.success('SMS sent to ' + bestContact.name, 'PhoneSocial');
+            }
+            console.log('[PhoneSocial] 📱 inline SMS reply → ' + bestContact.name + ': ' +
+                msgText.slice(0, 60));
+        } catch (e) {
+            console.warn('[PhoneSocial] handleInlineSMSReply error:', e);
         }
     }
 

@@ -16,9 +16,15 @@
         openOnChat: false,
         ttsEnabled: false,       // Use ST's TTS for incoming SMS/calls
         toastrEnabled: true,     // Show toastr notifications for incoming SMS/calls
+        ttsProvider: 'elevenlabs',  // TTS provider: 'elevenlabs' or ''
+        ttsApiKey: '',              // API key for TTS provider
     };
     const VIEW_HISTORY_LIMIT = 25;
     const VALID_VIEWS = new Set(['home', 'contacts', 'sms', 'thread', 'dial', 'settings', 'albums', 'profile', 'memories', 'call', 'browser', 'chirp', 'chirp-thread', 'favorites']);
+    const VIEW_PARENT = {
+        'thread': 'sms', 'profile': 'contacts', 'chirp-thread': 'chirp',
+        'call': 'home', 'browser': 'home', 'memories': 'home', 'albums': 'home',
+    };
 
     // -------------------------------------------------------------------
     // Per-chat state (reset on every CHAT_CHANGED)
@@ -53,6 +59,10 @@
             incomingBanner: null, // {contactId, name, text, ts} — transient SMS popup
             lastUserMessageAt: 0,  // timestamp of last user message (for inactivity tracking)
             userDnd: false,        // do-not-disturb: suppress all autonomous messages
+            mutedContacts: {},     // {contactId: true} — per-contact mute
+            scheduleSelectedDay: null, // selected day for schedule pill display
+            ttsVoices: [],             // cached TTS voice list [{voice_id, name}]
+            ttsVoicesFetched: 0,       // timestamp of last voice fetch
         };
     }
 
@@ -91,52 +101,38 @@
     function getBlockedSet() {
         const ctx = getCtx();
         const set = new Set(['system', 'sillytavern system', 'narrator', 'akuma']);
-        if (!ctx) return set;
-        // BLOCK the full active character name ONLY — do NOT block individual
-        // name parts. Ensemble cards like "Corey + Jay" write multiple NPCs;
-        // blocking "Corey" and "Jay" would prevent harvesting them as contacts.
-        const name2 = (ctx.name2 || ctx.name || '').trim().toLowerCase();
-        if (name2) set.add(name2);
-        // All name variants for the user
+        if (!ctx) {
+            return {
+                set,
+                activeName: '',
+                blockedCards: new Set(),
+            };
+        }
+        const activeName = (ctx.name2 || ctx.name || '').trim().toLowerCase();
+        if (activeName) set.add(activeName);
         const name1 = (ctx.name1 || '').trim().toLowerCase();
-        if (name1) {
-            set.add(name1);
-            for (const part of name1.split(/[\s_\-]+/)) {
-                if (part.length > 1) set.add(part);
-            }
-        }
+        if (name1) set.add(name1);
         const personaName = (ctx.chatMetadata?.user_name || '').trim().toLowerCase();
-        if (personaName) {
-            set.add(personaName);
-            for (const part of personaName.split(/[\s_\-]+/)) {
-                if (part.length > 1) set.add(part);
-            }
-        }
-        // Block the FULL names of loaded ST character cards — these are
-        // roleplay characters, not NPCs. But do NOT block individual name
-        // parts that belong to the ACTIVE ensemble card (e.g. "Corey" from
-        // "Corey + Jay") — those ARE the NPCs we want to harvest.
-        if (ctx.characters) {
-            const activeCardParts = name2 ? name2.split(/[+,&\s]+/).map(p => p.trim().toLowerCase()).filter(p => p.length > 1) : [];
+        if (personaName) set.add(personaName);
+        const blockedCards = new Set();
+        if (Array.isArray(ctx.characters)) {
             for (const ch of ctx.characters) {
-                if (!ch?.name) continue;
-                const n = ch.name.trim().toLowerCase();
-                if (!n) continue;
-                // Skip cards whose names are parts of the active ensemble card
-                // (e.g. "Corey" is a part of "Corey + Jay" — don't block it)
-                if (activeCardParts.includes(n)) continue;
-                set.add(n);
+                const n = (ch?.name || '').trim().toLowerCase();
+                if (!n || n === activeName) continue;
+                blockedCards.add(n);
             }
         }
-        return set;
+        return { set, activeName, blockedCards };
     }
 
     /** Check if a name matches any blocked entry (contains a blocked substring) */
     function isBlocked(name, blockedSet) {
         const norm = (name || '').trim().toLowerCase();
         if (!norm) return true;
-        if (blockedSet.has(norm)) return true;
-        for (const b of blockedSet) {
+        const entries = blockedSet instanceof Set ? blockedSet : blockedSet?.set;
+        if (!entries) return true;
+        if (entries.has(norm)) return true;
+        for (const b of entries) {
             // Only check if the name CONTAINS a blocked substring.
             // Do NOT check the reverse (b.includes(norm)) — that would
             // incorrectly block "Corey" because "Corey + Jay" contains it.
@@ -199,6 +195,10 @@ function cleanThreads(threads) {
             meta.chirpLastRefresh = state.chirpLastRefresh || 0;
             meta.lastUserMessageAt = state.lastUserMessageAt || 0;
             meta.userDnd = state.userDnd || false;
+            meta.mutedContacts = state.mutedContacts || {};
+            meta.scheduleSelectedDay = state.scheduleSelectedDay || null;
+            meta.ttsVoices = Array.isArray(state.ttsVoices) ? state.ttsVoices : [];
+            meta.ttsVoicesFetched = state.ttsVoicesFetched || 0;
             try { ctx?.saveMetadata?.(); } catch (_e1) {
                 setTimeout(() => { try { ctx?.saveMetadata?.(); } catch (_e2) {} }, 200);
             }
@@ -225,6 +225,10 @@ function cleanThreads(threads) {
             chirpLastRefresh: state.chirpLastRefresh || 0,
             lastUserMessageAt: state.lastUserMessageAt || 0,
             userDnd: state.userDnd || false,
+            mutedContacts: state.mutedContacts || {},
+            scheduleSelectedDay: state.scheduleSelectedDay || null,
+            ttsVoices: Array.isArray(state.ttsVoices) ? state.ttsVoices : [],
+            ttsVoicesFetched: state.ttsVoicesFetched || 0,
         };
         // ST extensionSettings path
         if (ctx?.extensionSettings) {
@@ -308,6 +312,10 @@ function cleanThreads(threads) {
                     }
                     if (typeof backup.lastUserMessageAt === 'number') state.lastUserMessageAt = backup.lastUserMessageAt;
                     if (typeof backup.userDnd === 'boolean') state.userDnd = backup.userDnd;
+                    if (backup.mutedContacts && typeof backup.mutedContacts === 'object') state.mutedContacts = backup.mutedContacts;
+                    if (typeof backup.scheduleSelectedDay === 'string' || backup.scheduleSelectedDay === null) state.scheduleSelectedDay = backup.scheduleSelectedDay;
+                    if (Array.isArray(backup.ttsVoices)) state.ttsVoices = backup.ttsVoices;
+                    if (typeof backup.ttsVoicesFetched === 'number') state.ttsVoicesFetched = backup.ttsVoicesFetched;
                     loadedFromLocal = true;
                 }
             }
@@ -350,6 +358,10 @@ function cleanThreads(threads) {
             }
             if (typeof meta.lastUserMessageAt === 'number') state.lastUserMessageAt = meta.lastUserMessageAt;
             if (typeof meta.userDnd === 'boolean') state.userDnd = meta.userDnd;
+            if (meta.mutedContacts && typeof meta.mutedContacts === 'object') state.mutedContacts = meta.mutedContacts;
+            if (typeof meta.scheduleSelectedDay === 'string' || meta.scheduleSelectedDay === null) state.scheduleSelectedDay = meta.scheduleSelectedDay;
+            if (Array.isArray(meta.ttsVoices)) state.ttsVoices = meta.ttsVoices;
+            if (typeof meta.ttsVoicesFetched === 'number') state.ttsVoicesFetched = meta.ttsVoicesFetched;
         }
         // If still no contacts, try extensionSettings backup (skip localStorage — already tried)
         if (!loadedFromLocal && (!state.contacts.length || !Object.keys(state.threads).length)) {
@@ -487,8 +499,13 @@ function cleanThreads(threads) {
             applyView(target);
             return;
         }
-        if (state.view !== 'home') {
-            applyView('home');
+        if (state.view && state.view !== 'home') {
+            const parent = VIEW_PARENT[state.view];
+            if (parent && VALID_VIEWS.has(parent)) {
+                applyView(parent);
+            } else {
+                applyView('home');
+            }
             return;
         }
         state.viewHistory = [];
@@ -1644,11 +1661,75 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-msg-time.me { text-align:right; }
             #phonesocial-panel .ps-msg-time.them { text-align:left; }
             /* ─── Read Receipts ─── */
-            #phonesocial-panel .ps-receipt {
+            #phonesocial-panel .ps-msg-receipt {
                 font-size:10px; color:#8e8e93;
-                align-self:flex-end; margin-right:8px; margin-bottom:6px;
+                display:block; text-align:right;
+                margin:0 8px 6px 0;
             }
-            #phonesocial-panel .ps-receipt.ps-seen { color:#007aff; }
+            #phonesocial-panel .ps-msg-receipt.ps-read { color:#007aff; }
+            /* ─── Schedule Display ─── */
+            #phonesocial-panel .ps-schedule-status-card {
+                display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+                background:#f2f2f7; border-radius:10px; padding:10px; margin-bottom:10px;
+            }
+            #phonesocial-panel .ps-schedule-status-icon { font-size:18px; }
+            #phonesocial-panel .ps-schedule-status-label { font-size:12px; font-weight:600; color:#1c1c1e; }
+            #phonesocial-panel .ps-schedule-talk-bar {
+                flex-basis:100%; height:4px; background:#e5e5ea; border-radius:2px; overflow:hidden;
+            }
+            #phonesocial-panel .ps-schedule-talk-fill {
+                height:100%; background:#007aff; border-radius:2px; transition:width 0.3s;
+            }
+            #phonesocial-panel .ps-schedule-pills {
+                display:flex; gap:4px; overflow-x:auto; padding:4px 0 8px;
+                -webkit-overflow-scrolling:touch; scrollbar-width:none;
+            }
+            #phonesocial-panel .ps-schedule-pills::-webkit-scrollbar { display:none; }
+            #phonesocial-panel .ps-schedule-pill {
+                flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:2px;
+                padding:6px 10px; border-radius:10px; border:1.5px solid #d1d1d6;
+                background:#fff; cursor:pointer; font-size:12px; color:#1c1c1e; min-width:44px;
+            }
+            #phonesocial-panel .ps-schedule-pill-sel {
+                background:#007aff; color:#fff; border-color:#007aff;
+            }
+            #phonesocial-panel .ps-schedule-pill-today:not(.ps-schedule-pill-sel) {
+                border-color:#007aff; border-width:2px;
+            }
+            #phonesocial-panel .ps-schedule-pill-dots {
+                display:flex; gap:1px; flex-wrap:wrap; justify-content:center; max-width:32px;
+            }
+            #phonesocial-panel .ps-schedule-blocks {
+                position:relative; display:flex; flex-direction:column; gap:2px;
+                max-height:240px; overflow-y:auto;
+            }
+            #phonesocial-panel .ps-schedule-block {
+                display:flex; align-items:center; gap:8px; padding:6px 8px;
+                background:#f9f9fb; border-radius:8px; font-size:12px;
+            }
+            #phonesocial-panel .ps-schedule-block-time {
+                font-family:monospace; font-size:11px; color:#8e8e93; min-width:88px;
+            }
+            #phonesocial-panel .ps-schedule-block-dot {
+                width:8px; height:8px; border-radius:50%; flex-shrink:0;
+            }
+            #phonesocial-panel .ps-schedule-block-activity {
+                flex:1; color:#1c1c1e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            }
+            #phonesocial-panel .ps-schedule-block-status {
+                font-size:10px; padding:2px 6px; border-radius:4px; background:#e5e5ea; color:#3a3a3c;
+                text-transform:uppercase; font-weight:600;
+            }
+            #phonesocial-panel .ps-schedule-now {
+                position:absolute; left:0; right:0; z-index:2; pointer-events:none;
+            }
+            #phonesocial-panel .ps-schedule-now::before {
+                content:''; display:block; height:2px; background:#007aff;
+            }
+            #phonesocial-panel .ps-schedule-now span {
+                position:absolute; right:4px; top:-10px;
+                font-size:10px; color:#007aff; font-weight:600; white-space:nowrap;
+            }
             /* ─── Date Dividers ─── */
             #phonesocial-panel .ps-date-divider {
                 text-align:center; font-size:11px; color:#8e8e93;
@@ -1656,24 +1737,24 @@ function cleanThreads(threads) {
             }
             /* ─── iOS Dial Pad ─── */
             #phonesocial-panel .ps-dial {
-                text-align:center; padding:8px 0;
+                text-align:center; padding:4px 0;
                 display:flex; flex-direction:column; height:100%;
             }
             #phonesocial-panel .ps-dial-display {
-                font-size:32px; font-weight:300; color:#1c1c1e;
-                margin:20px 0 24px; min-height:40px;
+                font-size:26px; font-weight:300; color:#1c1c1e;
+                margin:10px 0 14px; min-height:30px;
                 letter-spacing:1px; font-variant-numeric:tabular-nums;
             }
             #phonesocial-panel .ps-dial-placeholder {
-                color:#c7c7cc; font-size:18px; font-weight:400;
+                color:#c7c7cc; font-size:16px; font-weight:400;
             }
             #phonesocial-panel .ps-dial-pad {
-                display:grid; grid-template-columns:repeat(3,72px);
-                gap:12px; justify-content:center; flex:1;
-                align-content:center; padding-bottom:20px;
+                display:grid; grid-template-columns:repeat(3,52px);
+                gap:8px; justify-content:center; flex:1;
+                align-content:center; padding-bottom:10px;
             }
             #phonesocial-panel .ps-dial-key {
-                width:72px; height:72px; border-radius:50%;
+                width:52px; height:52px; border-radius:50%;
                 border:1px solid rgba(0,0,0,0.08);
                 background:#f9f9fb;
                 cursor:pointer;
@@ -1685,7 +1766,7 @@ function cleanThreads(threads) {
             }
             #phonesocial-panel .ps-dial-key:active { background:#e0e0e5; }
             #phonesocial-panel .ps-dial-key-num {
-                font-size:26px; font-weight:400; color:#1c1c1e;
+                font-size:22px; font-weight:400; color:#1c1c1e;
                 line-height:1; margin-bottom:2px;
             }
             #phonesocial-panel .ps-dial-key-sub {
@@ -1693,19 +1774,26 @@ function cleanThreads(threads) {
                 letter-spacing:1.5px; line-height:1;
             }
             #phonesocial-panel .ps-dial-actions {
-                display:flex; justify-content:center; align-items:center;
-                gap:20px; padding:16px 0 12px;
+                display:grid; grid-template-columns:repeat(3,52px);
+                gap:8px; justify-content:center;
+                padding:10px 0 8px;
+            }
+            #phonesocial-panel .ps-dial-actions .ps-dial-action-btn {
+                grid-column:1;
+            }
+            #phonesocial-panel .ps-dial-actions .ps-dial-call-btn {
+                grid-column:3;
             }
             #phonesocial-panel .ps-dial-action-btn {
-                width:64px; height:64px; border-radius:50%;
+                width:50px; height:50px; border-radius:50%;
                 border:none; background:#e5e5ea;
-                color:#1c1c1e; font-size:22px; cursor:pointer;
+                color:#1c1c1e; font-size:20px; cursor:pointer;
                 display:flex; align-items:center; justify-content:center;
                 -webkit-tap-highlight-color:transparent;
             }
             #phonesocial-panel .ps-dial-action-btn:active { background:#c7c7cc; }
             #phonesocial-panel .ps-dial-call-btn {
-                width:64px; height:64px; border-radius:50%;
+                width:50px; height:50px; border-radius:50%;
                 border:none; background:#34c759;
                 cursor:pointer;
                 display:flex; align-items:center; justify-content:center;
@@ -1719,10 +1807,10 @@ function cleanThreads(threads) {
             /* ─── Dial Tabs ─── */
             #phonesocial-panel .ps-dial-tabs {
                 display:flex; gap:0; border-bottom:1px solid #e5e5ea;
-                margin:0 0 8px;
+                margin:0 0 4px;
             }
             #phonesocial-panel .ps-dial-tab {
-                flex:1; padding:10px 0; border:none; background:transparent;
+                flex:1; padding:6px 0; border:none; background:transparent;
                 font-size:14px; font-weight:500; color:#8e8e93;
                 cursor:pointer; text-align:center;
                 border-bottom:2px solid transparent;
@@ -1989,7 +2077,6 @@ function cleanThreads(threads) {
                 'pointer-events:auto !important', // Force pointer events
             ].join(';') + ';';
             stopCallTimer();
-            stopProactiveCycle();
             setTimeout(() => { panel.style.display = 'none'; }, 260);
         } else {
             // Open
@@ -2016,7 +2103,7 @@ function cleanThreads(threads) {
     }
 
     function getStatusBarTime() {
-        const now = new Date();
+        const now = getChatTime();
         const h = now.getHours();
         const m = String(now.getMinutes()).padStart(2, '0');
         return `${h}:${m}`;
@@ -2044,7 +2131,7 @@ function cleanThreads(threads) {
 
     // ─── Notification Shade (pull-down) ──────────────────────────────
     function buildNotifShade() {
-        const now = new Date();
+        const now = getChatTime();
         const timeStr = now.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
         const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -2329,6 +2416,44 @@ function cleanThreads(threads) {
         if (composeDraft) {
             const input = panel.querySelector('#ps-input');
             if (input) { input.value = composeDraft; input.focus(); }
+        }
+
+        // Wire up TTS voice input in profile — save on change
+        const ttsInput = panel.querySelector('#ps-tts-voice');
+        if (ttsInput && !ttsInput._wired) {
+            ttsInput._wired = true;
+            ttsInput.addEventListener('change', () => {
+                const id = ttsInput.getAttribute('data-id');
+                const contact = state.contacts.find(c => c.id === id);
+                if (!contact) return;
+                const newVoice = (ttsInput.value || '').trim();
+                contact.ttsVoice = newVoice || undefined;
+                saveMeta();
+                console.log('[PhoneSocial] 🎤 TTS voice for ' + contact.name + ': ' + (newVoice || '(default)'));
+            });
+        }
+
+        // Click-outside-to-close for ⋮ menus (wire once)
+        if (!panel._menuOutsideWired) {
+            panel._menuOutsideWired = true;
+            document.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target.closest('.ps-menu-dropdown') || target.closest('[data-act="toggle-menu"]')) return;
+                document.querySelectorAll('.ps-menu-dropdown').forEach(d => d.style.display = 'none');
+            });
+        }
+
+        // Unlock audio autoplay on first user interaction (mobile browsers)
+        if (!panel._audioUnlocked) {
+            panel._audioUnlocked = true;
+            const unlock = () => {
+                const tmp = new Audio();
+                tmp.play().catch(() => {});
+                document.removeEventListener('pointerdown', unlock);
+                document.removeEventListener('touchstart', unlock);
+            };
+            document.addEventListener('pointerdown', unlock, { once: true });
+            document.addEventListener('touchstart', unlock, { once: true });
         }
 
         // Wire up close button once per render using the shared doClose handler
@@ -2656,13 +2781,13 @@ CRITICAL RULES:
         state.browserIndex = state.browserHistory.length - 1;
         state.browserUrl = q;
         saveMeta();
-        state.view = 'browser';
+        navigateTo('browser');
         render();
     }
 
     function viewHome() {
-        // Real time + date (updates on each render)
-        const now = new Date();
+        // Story time from AI narrative (falls back to real time)
+        const now = getChatTime();
         const hours = now.getHours();
         const mins = String(now.getMinutes()).padStart(2, '0');
         const timeStr = `${hours}:${mins}`;
@@ -3001,7 +3126,7 @@ CRITICAL RULES:
             return d.toLocaleDateString([], { month:'short', day:'numeric' });
         };
 
-        // Build message list with date dividers
+        // Build message list with date dividers + per-message read receipts
         let lastDate = '';
         const msgHtml = msgs.map((m, i) => {
             const curDate = fmtDate(m.ts);
@@ -3009,6 +3134,12 @@ CRITICAL RULES:
             lastDate = curDate;
             const time = fmtTime(m.ts);
             const isImage = !!m.imageUrl;
+            // Per-message delivery receipt for user messages
+            const receipt = m.from === 'me'
+                ? (m.seen
+                    ? '<span class="ps-msg-receipt ps-read">Read</span>'
+                    : '<span class="ps-msg-receipt">Delivered</span>')
+                : '';
             return `
                 ${divider}
                 <div class="ps-msg ps-${m.from}${isImage ? ' ps-msg-img' : ''}">
@@ -3018,20 +3149,9 @@ CRITICAL RULES:
                     <button data-act="delete-msg" data-id="${c.id}" data-msg-index="${i}" type="button" class="ps-msg-del" title="Delete message">×</button>
                 </div>
                 <span class="ps-msg-time ${m.from}">${time}</span>
+                ${receipt}
             `;
         }).join('');
-
-        // iMessage-style read receipt for the LAST user message
-        let receipt = '';
-        const lastMeMsg = msgs.reduce((acc, m, i) => m.from === 'me' ? { index: i, msg: m } : acc, null);
-        if (lastMeMsg) {
-            const seenTime = lastMeMsg.msg.seen
-                ? new Date(lastMeMsg.msg.ts).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' })
-                : '';
-            receipt = lastMeMsg.msg.seen
-                ? `<div class="ps-receipt ps-seen">Seen ${seenTime}</div>`
-                : '<div class="ps-receipt">Delivered</div>';
-        }
 
         return `
             <div class="ps-thread-head">
@@ -3041,11 +3161,15 @@ CRITICAL RULES:
                     <b style="color:#f2f2f7;font-size:15px">${escape(c.name)}</b>
                     ${isTyping ? '<div style="font-size:11px;color:#34c759">typing…</div>' : ''}
                 </div>
-                <div class="ps-thread-actions">
-                    <button data-act="toggle-star" data-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}" style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px 6px">${c.starred ? '★' : '☆'}</button>
-                    <button data-act="open-profile" data-id="${c.id}" title="Contact Profile">📋</button>
-                    <button data-act="call" data-id="${c.id}">📞</button>
-                    <button data-act="delete-thread" data-id="${c.id}" type="button" title="Delete conversation" style="background:rgba(255,69,58,0.15);color:#ff453a;border:none;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer">🗑️</button>
+                <div class="ps-thread-actions" style="position:relative">
+                    <button data-act="toggle-menu" data-id="${c.id}" data-context="thread" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px 8px;color:#8e8e93;line-height:1">⋮</button>
+                    <div class="ps-menu-dropdown" id="ps-menu-${c.id}" style="display:none;position:absolute;right:0;top:100%;background:#2c2c2e;border-radius:10px;padding:4px 0;min-width:160px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,0.4)">
+                        <button data-act="toggle-mute" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${state.mutedContacts[c.id] ? '🔔' : '🔕'} ${state.mutedContacts[c.id] ? 'Unmute' : 'Mute'}</button>
+                        <button data-act="toggle-star" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${c.starred ? '★' : '☆'} ${c.starred ? 'Unstar' : 'Star'}</button>
+                        <button data-act="open-profile" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">📋 Profile</button>
+                        <button data-act="call" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">📞 Call</button>
+                        <button data-act="delete-thread" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#ff453a;font-size:14px;text-align:left;cursor:pointer">🗑️ Delete</button>
+                    </div>
                 </div>
             </div>
             <div class="ps-thread" id="ps-thread-scroll">
@@ -3054,7 +3178,6 @@ CRITICAL RULES:
                 <div class="ps-typing">
                     <span></span><span></span><span></span>
                 </div>` : ''}
-                ${receipt}
             </div>
             <div class="ps-compose">
                 <button data-act="attach-image" type="button" class="ps-compose-camera" title="Send Photo">📷</button>
@@ -3232,7 +3355,7 @@ function viewDial() {
             {
                 key: 'ttsEnabled',
                 label: '🔊 TTS notifications',
-                desc: 'Read incoming SMS and calls aloud using ST\'s built-in TTS system.',
+                desc: 'Read incoming SMS and calls aloud using the TTS provider configured below.',
             },
             {
                 key: 'toastrEnabled',
@@ -3273,8 +3396,19 @@ function viewDial() {
                 <button data-act="save-settings" style="margin-top:12px; background:#a855f7; color:white; border:none; padding:10px 16px; border-radius:12px">Save Settings</button>
                 <div id="ps-settings-status" style="margin-top:8px; font-size:12px; color:#4ade80"></div>
                 <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
-                <h3 style="margin:0 0 12px; color:#581c87">Notifications</h3>
-                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">TTS uses ST's built-in TTS engine — enable it in Extension → Text-to-Speech and assign voices to characters. Toastr popups work instantly.</p>
+                <h3 style="margin:0 0 8px; color:#581c87">🔈 TTS Provider</h3>
+                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">Direct API call — no dependency on ST's TTS extension. Voice ID goes in each contact's profile.</p>
+                <label style="display:block; margin:8px 0 4px; font-size:12px">Provider</label>
+                <select id="ps-tts-provider" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe">
+                    <option value="elevenlabs"${state.settings.ttsProvider === 'elevenlabs' ? ' selected' : ''}>ElevenLabs</option>
+                    <option value=""${!state.settings.ttsProvider ? ' selected' : ''}>None (disabled)</option>
+                </select>
+                <label style="display:block; margin:8px 0 4px; font-size:12px">API Key</label>
+                <input type="password" id="ps-tts-apikey" value="${escape(state.settings.ttsApiKey || '')}" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe" placeholder="sk_...">
+                <button data-act="fetch-tts-voices" style="margin-top:8px; background:#007aff; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:12px; cursor:pointer">🔈 Fetch Voices</button>
+                <span id="ps-tts-voice-count" style="margin-left:8px; font-size:12px; color:#8e8e93">${state.ttsVoices.length ? state.ttsVoices.length + ' voices cached' : ''}</span>
+                <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
+                <h3 style="margin:0 0 8px; color:#581c87">Notifications</h3>
                 ${toggles}
                 <div class="ps-setting-actions" style="margin-top:12px">
                     <button data-act="harvest-now">Harvest NPCs now</button>
@@ -3342,11 +3476,32 @@ function viewDial() {
             <div class="ps-thread-head">
                 <button data-act="nav" data-view="contacts">←</button>
                 <b>${escape(c.name)}</b>
-                <button data-act="toggle-star" data-id="${escape(c.id)}" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">${c.starred ? '★' : '☆'}</button>
+                <div style="position:relative">
+                    <button data-act="toggle-menu" data-id="${escape(c.id)}" data-context="profile" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px 8px;color:#8e8e93;line-height:1">⋮</button>
+                    <div class="ps-menu-dropdown" id="ps-menu-${c.id}" style="display:none;position:absolute;right:0;top:100%;background:#2c2c2e;border-radius:10px;padding:4px 0;min-width:160px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,0.4)">
+                        <button data-act="toggle-mute" data-id="${escape(c.id)}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${state.mutedContacts[c.id] ? '🔔' : '🔕'} ${state.mutedContacts[c.id] ? 'Unmute' : 'Mute'}</button>
+                        <button data-act="toggle-star" data-id="${escape(c.id)}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${c.starred ? '★' : '☆'} ${c.starred ? 'Unstar' : 'Star'}</button>
+                    </div>
+                </div>
             </div>
             <div style="padding:12px;color:#1c1c1e;flex:1;overflow-y:auto">
                 <p style="margin:0 0 4px;font-size:12px;color:#8e8e93">${escape(c.number)}</p>
                 <p style="margin:0 0 12px;font-size:11px;color:#8e8e93">Source: ${escape(c.source)}</p>
+                <div style="margin:0 0 8px">
+                    <label style="font-size:11px;color:#8e8e93">TTS Voice<br></label>
+                    ${state.ttsVoices.length ? `
+                    <select id="ps-tts-voice" data-act="set-tts-voice" data-id="${escape(c.id)}"
+                        style="width:100%;padding:8px;border:1px solid #d1d1d6;border-radius:8px;font-size:13px;color:#1c1c1e;background:#fff;box-sizing:border-box">
+                        <option value="">— Default voice —</option>
+                        ${state.ttsVoices.map(v => `<option value="${escape(v.voice_id)}"${c.ttsVoice === v.voice_id ? ' selected' : ''}>${escape(v.name)}</option>`).join('')}
+                    </select>
+                    ` : `
+                    <input id="ps-tts-voice" type="text" placeholder="ElevenLabs voice ID (fetch voices in Settings first)"
+                        value="${escape(c.ttsVoice || '')}"
+                        style="width:100%;padding:8px;border:1px solid #d1d1d6;border-radius:8px;font-size:13px;color:#1c1c1e;background:#fff;box-sizing:border-box"
+                        data-act="set-tts-voice" data-id="${escape(c.id)}">
+                    `}
+                </div>
                 <hr style="border:none;border-top:1px solid #e5e5ea;margin:8px 0">
                 <h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Memories</h4>
                 ${mems.length ? mems.map(m => `
@@ -3358,6 +3513,12 @@ function viewDial() {
                     </div>
                 `).join('') : '<p style="font-size:12px;color:#8e8e93">No memories extracted yet. Keep texting to build a relationship profile.</p>'}
                 ${renderScheduleSection(c)}
+                <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e5e5ea">
+                    <button data-act="delete-contact" data-id="${escape(c.id)}"
+                        style="width:100%;padding:12px;background:#fee2e2;color:#dc2626;border:1px solid #fecaca;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">
+                        🗑 Delete Contact
+                    </button>
+                </div>
             </div>
         `;
     }
@@ -3433,6 +3594,7 @@ function viewAlbums() {
                 togglePanel();
                 return;
             case 'nav':
+                state.viewHistory = [];
                 state.view = el.getAttribute('data-view');
                 if (state.view === 'contacts' || state.view === 'favorites') {
                     harvestNPCs();
@@ -3476,6 +3638,20 @@ function viewAlbums() {
                 render();
                 return;
 
+            case 'toggle-menu': {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const menuId = el.getAttribute('data-id');
+                const dropdown = document.getElementById('ps-menu-' + menuId);
+                if (!dropdown) return;
+                // Close all other open menus first
+                document.querySelectorAll('.ps-menu-dropdown').forEach(d => {
+                    if (d !== dropdown) d.style.display = 'none';
+                });
+                const isOpen = dropdown.style.display === 'block';
+                dropdown.style.display = isOpen ? 'none' : 'block';
+                return;
+            }
             case 'toggle-star': {
                 const starId = el.getAttribute('data-id');
                 const contact = state.contacts.find(c => c.id === starId);
@@ -3486,10 +3662,37 @@ function viewAlbums() {
                 }
                 return;
             }
+            case 'set-tts-voice': {
+                const voiceId = el.getAttribute('data-id');
+                const voiceContact = state.contacts.find(c => c.id === voiceId);
+                if (!voiceContact) return;
+                const newVoice = (el.value || '').trim();
+                voiceContact.ttsVoice = newVoice || undefined;
+                saveMeta();
+                console.log('[PhoneSocial] 🎤 TTS voice for ' + voiceContact.name + ': ' + (newVoice || '(default)'));
+                return;
+            }
+            case 'toggle-mute': {
+                const muteId = el.getAttribute('data-id');
+                if (state.mutedContacts[muteId]) {
+                    delete state.mutedContacts[muteId];
+                } else {
+                    state.mutedContacts[muteId] = true;
+                }
+                saveMeta();
+                render();
+                return;
+            }
+            case 'schedule-day': {
+                state.scheduleSelectedDay = el.getAttribute('data-day');
+                saveMeta();
+                render();
+                return;
+            }
             
             case 'open-profile':
                 state.activeContact = el.getAttribute('data-id');
-                state.view = 'profile';
+                navigateTo('profile');
                 saveMeta();
                 render();
                 return;
@@ -3531,12 +3734,20 @@ function viewAlbums() {
                 render();
                 return;
             case 'delete-contact': {
+                ev.preventDefault();
+                ev.stopPropagation();
                 const delId = el.getAttribute('data-id');
                 if (!delId) return;
+                const delContact = state.contacts.find(c => c.id === delId);
+                const delName = delContact ? delContact.name : 'this contact';
+                const ok = confirm('Delete ' + delName + '? This cannot be undone.');
+                if (ok !== true) return;
+                console.log('[PhoneSocial] Deleting contact:', delName, delId);
                 state.contacts = state.contacts.filter(c => c.id !== delId);
                 delete state.threads[delId];
                 state.callLog = state.callLog.filter(l => l.contactId !== delId);
                 if (state.activeContact === delId) state.activeContact = null;
+                state.view = 'contacts';
                 saveMeta();
                 render();
                 return;
@@ -3957,17 +4168,21 @@ function viewAlbums() {
                 const model = document.getElementById('ps-set-model')?.value.trim();
                 const prompt = document.getElementById('ps-set-prompt')?.value.trim();
                 window.PhoneSocialSettings = { apiUrl: url, apiKey: key, model, systemPromptTemplate: prompt };
-                // Persist #1: via SillyTavern context extension settings (most reliable)
+                // Save TTS fields to state.settings
+                const ttsProv = document.getElementById('ps-tts-provider')?.value || '';
+                const ttsKey = document.getElementById('ps-tts-apikey')?.value.trim();
+                state.settings.ttsProvider = ttsProv;
+                state.settings.ttsApiKey = ttsKey;
+                saveMeta();
+                // Persist PhoneSocialSettings
                 const ctx = getCtx();
                 if (ctx?.extensionSettings) {
                     ctx.extensionSettings[EXT_NAME] = window.PhoneSocialSettings;
                     try { ctx.saveSettingsDebounced?.(); } catch (_) { /* ignore */ }
                 }
-                // Persist #2: extension_settings fallback (same object, but also ensure save settings)
                 if (window.extension_settings) {
                     window.extension_settings.PhoneSocial = window.PhoneSocialSettings;
                 }
-                // Persist #3: chat metadata fallback (also saves view state)
                 const meta = getChatMeta();
                 if (meta) {
                     meta.apiSettings = window.PhoneSocialSettings;
@@ -3975,6 +4190,34 @@ function viewAlbums() {
                 }
                 const status = document.getElementById('ps-settings-status');
                 if (status) status.textContent = '✅ Saved!';
+                return;
+            }
+            case 'fetch-tts-voices': {
+                const apiKey = state.settings.ttsApiKey || document.getElementById('ps-tts-apikey')?.value.trim();
+                if (!apiKey) {
+                    if (typeof toastr !== 'undefined') toastr.warning('Enter an API key first.', 'TTS');
+                    return;
+                }
+                const countEl = document.getElementById('ps-tts-voice-count');
+                if (countEl) countEl.textContent = 'Fetching…';
+                fetch('https://api.elevenlabs.io/v1/voices', {
+                    headers: { 'xi-api-key': apiKey },
+                }).then(r => r.json()).then(data => {
+                    if (data.voices && Array.isArray(data.voices)) {
+                        state.ttsVoices = data.voices.map(v => ({ voice_id: v.voice_id, name: v.name }));
+                        state.ttsVoicesFetched = Date.now();
+                        saveMeta();
+                        if (countEl) countEl.textContent = state.ttsVoices.length + ' voices cached';
+                        if (typeof toastr !== 'undefined') toastr.success('Fetched ' + state.ttsVoices.length + ' voices', 'TTS');
+                        render();
+                    } else {
+                        throw new Error('Unexpected response');
+                    }
+                }).catch(e => {
+                    console.warn('[PhoneSocial] fetch voices failed:', e);
+                    if (countEl) countEl.textContent = 'Error';
+                    if (typeof toastr !== 'undefined') toastr.error('Failed to fetch voices. Check API key.', 'TTS');
+                });
                 return;
             }
             // ─── Browser actions ────────────────────────────────────
@@ -4065,7 +4308,7 @@ function viewAlbums() {
                 const threadId = el.getAttribute('data-chirp-id');
                 if (!threadId) return;
                 state.activeContact = threadId; // reuse activeContact for post ID
-                state.view = 'chirp-thread';
+                navigateTo('chirp-thread');
                 saveMeta();
                 render();
                 return;
@@ -4112,25 +4355,68 @@ function viewAlbums() {
             console.log('[PhoneSocial] TTS skipped: PhoneSocial toggle OFF');
             return;
         }
-        if (!isTtsAvailable()) {
-            console.log('[PhoneSocial] TTS skipped: ST TTS not enabled');
+        if (!state.settings.ttsProvider || !state.settings.ttsApiKey) {
+            console.log('[PhoneSocial] TTS skipped: no TTS provider or API key configured');
             return;
         }
         if (!text) return;
-        const ctx = getCtx();
-        if (!ctx?.executeSlashCommands) {
-            console.warn('[PhoneSocial] TTS skipped: no executeSlashCommands');
-            return;
+
+        // Look up voice ID from contact
+        let voiceId = null;
+        if (contactName) {
+            const contact = state.contacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
+            voiceId = contact?.ttsVoice || null;
         }
-        console.log('[PhoneSocial] TTS speaking:', text.slice(0, 60));
-        // Use plain /speak with no voice override — avoids "no voice assigned to X" errors.
-        // ST will use whatever TTS voice is configured as default in its settings.
+
+        console.log('[PhoneSocial] TTS speaking:', text.slice(0, 60), 'voice:', voiceId || '(default)');
+
         try {
-            const cleanText = String(text).replace(/"/g, '\\"').slice(0, 300);
-            await ctx.executeSlashCommands(`/speak "${cleanText}"`);
+            if (state.settings.ttsProvider === 'elevenlabs') {
+                await elevenlabsTts(text, voiceId, state.settings.ttsApiKey);
+            }
         } catch (e) {
             console.warn('[PhoneSocial] TTS failed:', e);
         }
+    }
+
+    async function elevenlabsTts(text, voiceId, apiKey) {
+        const vid = voiceId || '21m00Tcm4TlvDq8ikWAM'; // Rachel default
+        const resp = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + vid, {
+            method: 'POST',
+            headers: {
+                'xi-api-key': apiKey,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                text: String(text).slice(0, 5000),
+                model_id: 'eleven_flash_v2_5',
+                voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+            }),
+        });
+        if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error('ElevenLabs API ' + resp.status + ': ' + errText.slice(0, 200));
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.setAttribute('playsinline', '');
+        // Attach to DOM so mobile browsers don't block it
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+        try {
+            await audio.play();
+        } catch (playErr) {
+            console.warn('[PhoneSocial] TTS play blocked (autoplay):', playErr.message);
+        }
+        audio.onended = () => {
+            URL.revokeObjectURL(url);
+            audio.remove();
+        };
+        audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            audio.remove();
+        };
     }
 
     // ─── Toastr notifications ───────────────────────────────────────
@@ -4220,11 +4506,29 @@ function viewAlbums() {
         const myName = ctx?.name1 || ctx?.chatMetadata?.user_name || ctx?.name || 'You';
         const thread = state.threads[contactId] || [];
         const recentMessages = thread.slice(-10);
-        const conversation = recentMessages.map(m => {
+        // ── Build conversation with image tracking for multimodal vision ──
+        const convoMsgs = [];  // [{speaker, text? imageUrl?}]
+        for (const m of recentMessages) {
             const speaker = m.from === 'me' ? myName : contact.name;
-            if (m.imageUrl) return `${speaker}: [sent a photo]`;
-            return `${speaker}: ${m.text || ''}`;
-        }).join('\n');
+            if (m.imageUrl) {
+                convoMsgs.push({ speaker, imageUrl: m.imageUrl });
+            } else {
+                convoMsgs.push({ speaker, text: m.text || '' });
+            }
+        }
+        // Text-only representation for prompts (images become [photo] placeholder)
+        const conversation = convoMsgs.map(m =>
+            m.imageUrl ? `${m.speaker}: [sent a photo]` : `${m.speaker}: ${m.text}`
+        ).join('\n');
+        
+        // Check if any messages have images (for multimodal API call)
+        const hasImages = convoMsgs.some(m => !!m.imageUrl);
+        const imageParts = hasImages
+            ? convoMsgs.filter(m => m.imageUrl).map(m => ({
+                type: 'image_url',
+                image_url: { url: m.imageUrl, detail: 'auto' }
+            }))
+            : [];
 
         // Detect if the last message is from the NPC themselves — nothing to "reply" to.
         // In that case, this is a follow-up / double-text, not a reply.
@@ -4324,9 +4628,12 @@ function viewAlbums() {
 
             for (const url of urlCandidates) {
                 try {
+                    const userContent = hasImages
+                        ? [{ type: 'text', text: userMsg }, ...imageParts]
+                        : userMsg;
                     const body = { model, messages: [
                         { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userMsg },
+                        { role: 'user', content: userContent },
                     ], max_tokens: 300, temperature: 0.8 };
                     const res = await fetch(url, {
                         method: 'POST', headers, body: JSON.stringify(body),
@@ -4381,10 +4688,14 @@ function viewAlbums() {
                 isFollowUp ? 'Your follow-up:' : 'Your reply:',
             ].filter(Boolean).join('\n');
 
+            const stUserContent = hasImages
+                ? [{ type: 'text', text: userMsg }, ...imageParts]
+                : userMsg;
+
             const body = JSON.stringify({
                 messages: [
                     { role: 'system', content: systemMsg },
-                    { role: 'user', content: userMsg }
+                    { role: 'user', content: stUserContent }
                 ],
                 max_tokens: 300,
                 temperature: 0.8,
@@ -4512,7 +4823,10 @@ function viewAlbums() {
             for (let i = ctx.chat.length - 1; i >= 0 && recentMsgs.length < 3; i--) {
                 const msg = ctx.chat[i];
                 if (!msg || msg.is_user || msg.is_system) continue;
-                if ((msg.name || '').toLowerCase() === contactName) {
+                const speaker = (msg.name || '').toLowerCase();
+                const target = contactName.toLowerCase();
+                if (speaker === target ||
+                    (/[+,&]/.test(speaker) && speaker.split(/[+,&]\s*/).map(p => p.trim()).filter(Boolean).includes(target))) {
                     recentMsgs.push(msg.mes || msg.text || '');
                 }
             }
@@ -4603,12 +4917,22 @@ function viewAlbums() {
         return activity ? activity.label : null;
     }
 
-    async function simulateIncomingCall(contact) {
-        if (state.activeCall) return; // Already on a call
+    async function simulateIncomingCall(contact, opts = {}) {
+        console.log('[PhoneSocial] 📞 simulateIncomingCall ENTER: ' + contact.name + ' skipPresence=' + !!opts.skipPresenceCheck + ' activeCall=' + !!state.activeCall);
+        if (state.activeCall) {
+            console.log('[PhoneSocial] 📞 simulateIncomingCall BLOCKED: already on call with ' + (state.activeCall.contactId || '?'));
+            return; // Already on a call
+        }
+        // Mute check
+        if (state.mutedContacts[contact.id]) {
+            console.log('[PhoneSocial] 🔕 simulateIncomingCall BLOCKED: ' + contact.name + ' is muted');
+            return;
+        }
         // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.
         // The scheduler checks this, but chat state can change between
         // scheduling and execution. If they're in the room, abort.
-        if (isNpcPresent(contact.name)) {
+        // Skip when triggered by narrative cues (AI already said they're calling remotely).
+        if (!opts.skipPresenceCheck && isNpcPresent(contact.name)) {
             console.log('[PhoneSocial] 🛑 simulateIncomingCall BLOCKED: ' + contact.name + ' is present in scene');
             return;
         }
@@ -4616,9 +4940,10 @@ function viewAlbums() {
         if (shouldDeclineCall(contact, personality)) {
             const activity = getCurrentActivity(contact);
             const reason = activity ? ` (${activity.label})` : ' (personality)';
-            console.log(`[PhoneSocial] ${contact.name} thought about calling but decided not to${reason}`);
+            console.log(`[PhoneSocial] 📞 ${contact.name} DECLINED call${reason}`);
             return;
         }
+        console.log('[PhoneSocial] 📞 simulateIncomingCall SETUP: ' + contact.name + ' — incoming call active');
         state.activeCall = { contactId: contact.id, status: 'incoming', startTs: null };
         state.callLog.push({ contactId: contact.id, dir: 'in', ts: Date.now(), duration: 0 });
         state.view = 'call';
@@ -4652,21 +4977,39 @@ function viewAlbums() {
         state.activeCall._autoDeclineTimer = autoDeclineTimer;
     }
 
-    async function simulateProactiveText(contact, trigger) {
-        if (!state.settings.autoReplies) return;
+    async function simulateProactiveText(contact, trigger, opts = {}) {
+        console.log('[PhoneSocial] 💬 simulateProactiveText ENTER: ' + contact.name + ' skipPresence=' + !!opts.skipPresenceCheck + ' autoReplies=' + state.settings.autoReplies);
+        if (!state.settings.autoReplies) {
+            console.log('[PhoneSocial] 💬 simulateProactiveText BLOCKED: autoReplies OFF');
+            return;
+        }
+        // Mute check
+        if (state.mutedContacts[contact.id]) {
+            console.log('[PhoneSocial] 🔕 simulateProactiveText BLOCKED: ' + contact.name + ' is muted');
+            return;
+        }
         // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.
-        if (isNpcPresent(contact.name)) {
+        // Skip when triggered by narrative cues (AI already said they're texting remotely).
+        if (!opts.skipPresenceCheck && isNpcPresent(contact.name)) {
             console.log('[PhoneSocial] 🛑 simulateProactiveText BLOCKED: ' + contact.name + ' is present in scene');
             return;
         }
         if (!state.threads[contact.id]) state.threads[contact.id] = [];
         const personality = inferPersonality(contact);
         // AI generation only — if it fails, skip (no scripted fallbacks)
-        const aiReply = await generateSMSReply(contact.id);
-        if (!aiReply) {
-            console.log('[PhoneSocial] proactive: no AI reply for', contact.name, '— skipping');
+        console.log('[PhoneSocial] 💬 simulateProactiveText GENERATING for ' + contact.name + '...');
+        let aiReply;
+        try {
+            aiReply = await generateSMSReply(contact.id);
+        } catch (err) {
+            console.warn('[PhoneSocial] 💬 simulateProactiveText AI ERROR for ' + contact.name + ':', err.message || err);
             return;
         }
+        if (!aiReply) {
+            console.log('[PhoneSocial] 💬 simulateProactiveText: no AI reply for ' + contact.name + ' — skipping');
+            return;
+        }
+        console.log('[PhoneSocial] 💬 simulateProactiveText SUCCESS: ' + contact.name + ' → "' + aiReply.slice(0, 80) + '..."');
         const text = aiReply;
         setTimeout(() => {
             if (!state.threads[contact.id]) return;
@@ -4697,12 +5040,19 @@ function viewAlbums() {
             // few real messages to detect NPC presence. System messages don't have
             // NPC names anyway, so checking them is harmless.
             const recent = ctx.chat.slice(-80).filter(m => !!m);
-            // Pass 1: speaker check — NPC has a speaking line → definitely present
+            // Pass 1: speaker check — NPC has a speaking line → definitely present.
+            // Ensemble cards like "Corey + Jay" write multiple NPCs through a single
+            // speaker name. A part match counts as that individual NPC speaking.
             for (const m of recent) {
                 const speaker = (m.name || '').toLowerCase();
-                // Exact match only — "Corey + Jay" is a single character card,
-                // NOT two separate speakers. Do NOT split on +/,/&.
+                if (!speaker) continue;
                 if (speaker === nameLower) return true;
+                // Check if contact name is a token inside a compound speaker
+                // (e.g. "corey" inside "corey + jay" but NOT "jay" inside "jayden")
+                if (/[+,&]/.test(speaker)) {
+                    const parts = speaker.split(/[+,&]\s*/).map(p => p.trim()).filter(Boolean);
+                    if (parts.includes(nameLower)) return true;
+                }
             }
             // Pass 2: ensemble card detection — when all NPCs are written through
             // a single character card (e.g. "COD: Task Force RPG"), individual NPCs
@@ -4712,8 +5062,10 @@ function viewAlbums() {
             if (useNarration) {
                 const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const wordBoundary = new RegExp('\\b' + escaped + '\\b');
-                // Last 5 AI messages — covers the full narrative context window.
-                const aiMsgs = [...ctx.chat].reverse().filter(m => !!m && !m.is_user && !m.is_system).slice(0, 5);
+                // Last 8 AI messages — covers the full narrative context window.
+                // NO is_system filter — matches Pass 1 above. In many chats AI narration
+                // messages are flagged is_system, so filtering would miss ensemble NPCs.
+                const aiMsgs = [...ctx.chat].reverse().filter(m => !!m && !m.is_user).slice(0, 8);
                 for (const m of aiMsgs) {
                     const content = (m.mes || m.text || '').toLowerCase();
                     if (wordBoundary.test(content)) return true;
@@ -4723,328 +5075,12 @@ function viewAlbums() {
         return false;
     }
 
-    // Checks whether an NPC has EVER spoken in the main chat (wide window).
-    // Used to gate random proactivity — NPCs who've never appeared in-scene
-    // shouldn't send unprompted texts (they'd have no reason to).
-    function hasAppearedInChat(contactName) {
-        try {
-            const ctx = getCtx();
-            if (!ctx?.chat) return false;
-            const nameLower = contactName.toLowerCase();
-            const window = ctx.chat.slice(-200).filter(m => !!m);
-            for (const m of window) {
-                const speaker = (m.name || '').toLowerCase();
-                if (speaker === nameLower) return true;
-            }
-        } catch (_) {}
-        return false;
-    }
-
-    // Scans recent main chat for story beats that warrant a proactive message.
-    //  - Scene exit requires user messages with exit language after NPC's departure
-    //  - Conflict requires NPC as speaker or direct target, not just mentioned nearby
-    //  - No "mentioned" trigger — too noisy
-    function detectStoryTrigger(contactName) {
-        try {
-            const ctx = getCtx();
-            if (!ctx?.chat) return null;
-            const nameLower = contactName.toLowerCase();
-            const recent = ctx.chat.slice(-25).filter(m => m && !m.is_system);
-            if (!recent.length) return null;
-
-            // ── Guard: NPC still active in scene → don't trigger ──
-            let spokenRecently = false;
-            for (let i = recent.length - 1; i >= Math.max(0, recent.length - 3); i--) {
-                if ((recent[i].name || '').toLowerCase() === nameLower) {
-                    spokenRecently = true;
-                    break;
-                }
-            }
-            if (spokenRecently) return null; // They're literally in the room
-
-            // ── Find NPC's last appearance and user's last message ──
-            let npcLastIdx = -1;
-            let userLastIdx = -1;
-            for (let i = recent.length - 1; i >= 0; i--) {
-                const speaker = (recent[i].name || '').toLowerCase();
-                if (speaker === nameLower && npcLastIdx === -1) npcLastIdx = i;
-                if (recent[i].is_user && userLastIdx === -1) userLastIdx = i;
-            }
-
-            // ── NPC never spoke in this window → they can't have "left" or "fought" ──
-            if (npcLastIdx === -1) return null;
-
-            // Need at least 5 messages since NPC's last line for any trigger
-            const msgsSinceNpc = recent.length - 1 - npcLastIdx;
-            if (msgsSinceNpc < 5) return null;
-
-            // ── SCENE EXIT: NPC left the scene ──
-            // User must have spoken 3+ times since NPC's last line,
-            // and those user messages contain exit language
-            const userMsgsSince = recent.slice(npcLastIdx + 1).filter(m => m.is_user);
-            if (userMsgsSince.length >= 3) {
-                const exitWords = ['leave', 'left', 'walk out', 'storm', 'exit', 'gone', 'away', 'home', 'later', 'bye', 'goodbye', 'night', 'headed out', 'took off'];
-                let isExit = false;
-                for (const m of userMsgsSince) {
-                    const text = (m.mes || m.text || '').toLowerCase();
-                    for (const w of exitWords) {
-                        if (text.includes(w)) { isExit = true; break; }
-                    }
-                    if (isExit) break;
-                }
-                if (isExit) return { type: 'scene_exit', intensity: 'high' };
-            }
-
-            // ── CONFLICT: NPC was directly involved in an argument ──
-            // Only count if NPC is the SPEAKER of the conflict line, NOT just mentioned nearby
-            const conflictWords = ['yell', 'shout', 'slam', 'storm', 'argue', 'fight', 'furious',
-                'angry', 'upset', 'cry', 'tears', 'scream'];
-            let foundConflict = false;
-            let highIntensity = false;
-
-            for (let i = Math.max(0, npcLastIdx - 3); i <= npcLastIdx; i++) {
-                const m = recent[i];
-                const speaker = (m.name || '').toLowerCase();
-                const text = (m.mes || m.text || '').toLowerCase();
-
-                // NPC must be the SPEAKER, or the NEXT message's speaker must be NPC
-                // (someone yelled AT the NPC, then NPC responded)
-                const nextM = recent[i + 1];
-                const nextSpeaker = nextM ? (nextM.name || '').toLowerCase() : '';
-                const npcIsTarget = nextSpeaker === nameLower; // NPC responded right after this
-
-                if (speaker === nameLower || npcIsTarget) {
-                    for (const w of conflictWords) {
-                        const checkText = npcIsTarget ? text : text; // check the conflict message itself
-                        if (checkText.includes(w)) {
-                            foundConflict = true;
-                            if (w === 'storm' || w === 'furious' || w === 'scream') highIntensity = true;
-                            break;
-                        }
-                    }
-                    // Also check if NPC's OWN message contains emotional language
-                    if (!foundConflict && speaker === nameLower) {
-                        const emotional = ['sorry', 'apologize', 'regret', 'can\'t believe', 'hurt', 'upset', 'furious', 'angry'];
-                        for (const e of emotional) {
-                            if (text.includes(e)) { foundConflict = true; break; }
-                        }
-                    }
-                }
-                if (foundConflict && highIntensity) break;
-            }
-
-            if (foundConflict) {
-                return { type: 'conflict', intensity: highIntensity ? 'high' : 'medium' };
-            }
-        } catch (_) {}
-        return null;
-    }
-
-    // ─── Schedule-driven eligibility (Marinara-style autonomous gating) ───
-    // Returns null if contact has no schedule (fallback to legacy).
-    // Returns {eligible, reason?, priority?, status?, activity?, talkativeness?} otherwise.
-    function isEligibleBySchedule(c) {
-        if (!c.schedule || !c.schedule.days || !Object.keys(c.schedule.days).length) return null;
-        const s = c.schedule;
-        const now = getCurrentScheduleStatus(s);
-        if (!now) return null;
-        const status = now.status;
-        const talkativeness = s.talkativeness || 50;
-        const thresholdMs = (s.inactivityThresholdMinutes || 120) * 60000;
-
-        // ── Offline → never reach out ──
-        if (status === 'offline') return { eligible: false, reason: 'offline', status, talkativeness };
-
-        // ── Need user activity to measure against ──
-        if (!state.lastUserMessageAt) return { eligible: false, reason: 'no_user_msgs', status, talkativeness };
-        const elapsed = Date.now() - state.lastUserMessageAt;
-
-        // ── Status multipliers ──
-        let effectiveThreshold = thresholdMs;
-        if (status === 'dnd') effectiveThreshold *= 3;   // Working — wait 3x longer
-        if (status === 'idle') effectiveThreshold *= 1.5; // Semi-available
-
-        // ── Follow-up cap & escalating cooldown ──
-        const MAX_FOLLOWUPS = 3;
-        let am = c._autonomousMsgs;
-        if (!am) { am = { count: 0, lastSentAt: 0 }; c._autonomousMsgs = am; }
-        if (am.count >= MAX_FOLLOWUPS) return { eligible: false, reason: 'followup_cap', status, talkativeness, priority: 0 };
-
-        // Escalating cooldown based on follow-up count
-        const followupMultiplier = am.count === 0 ? 1 : am.count === 1 ? 2 : 4;
-        const followupThreshold = effectiveThreshold * followupMultiplier;
-        const followupElapsed = (am.lastSentAt || 0) ? Date.now() - am.lastSentAt : Infinity;
-        if (followupElapsed < followupThreshold) return { eligible: false, reason: 'followup_cooldown', status, talkativeness, priority: 0 };
-
-        // ── Base threshold check ──
-        if (elapsed < effectiveThreshold) return { eligible: false, reason: 'below_threshold', status, talkativeness, priority: 0 };
-
-        // ── Priority scoring ──
-        let priority = talkativeness;
-        if (status === 'online') priority += 20;
-        priority -= am.count * 10;
-
-        return { eligible: true, status, talkativeness, priority, activity: now.activity };
-    }
-
-    let proactiveInterval = null;
-    function startProactiveCycle() {
-        stopProactiveCycle();
-        proactiveInterval = setInterval(checkProactiveNPCs, 45000);
-        setTimeout(checkProactiveNPCs, 10000);
-    }
-    function stopProactiveCycle() {
-        if (proactiveInterval) {
-            clearInterval(proactiveInterval);
-            proactiveInterval = null;
-        }
-    }
-    function checkProactiveNPCs() {
-        const contacts = state.contacts;
-        if (!contacts.length || !state.settings.autoReplies) return;
-        // ── DND guard: suppress ALL autonomous messages ──
-        if (state.userDnd) {
-            console.log('[PhoneSocial] 🔇 DND active — skipping proactive check');
-            return;
-        }
-
-        // Debug: log which NPCs are being skipped
-        console.log('[PhoneSocial] 🔍 proactive check: ' + contacts.length + ' contacts, autoReplies=' + state.settings.autoReplies);
-        // Single diagnostic: show the latest 3 messages so we can tell what's current
-        try {
-            const ctx = getCtx();
-            if (ctx?.chat) {
-                const tail = ctx.chat.slice(-3).filter(m => !!m && !m.is_system);
-                const sample = tail.map(m =>
-                    '[' + (m.name || '?') + (m.is_system ? '/sys' : '') + (m.is_user ? '/user' : '') + '] ' +
-                    ((m.mes || m.text || '').slice(0, 100))
-                );
-                console.log('[PhoneSocial] 📝 scene tail: ' + sample.join(' | '));
-            }
-        } catch (_) {}
-        const skippedPresent = contacts.filter(c => isNpcPresent(c.name));
-        if (skippedPresent.length) {
-            console.log('[PhoneSocial] 🚫 skipping ' + skippedPresent.length + ' present NPCs: ' + skippedPresent.map(c => c.name).join(', '));
-        }
-
-        // Helper: has this NPC texted the user recently? Skip if so.
-        function hasRecentInteraction(c) {
-            const thread = state.threads[c.id];
-            if (!Array.isArray(thread) || !thread.length) return false;
-            const last = thread[thread.length - 1];
-            if (last.from === 'them' && (Date.now() - (last.ts || 0)) < 600000) return true;
-            if (last.from === 'me' && (Date.now() - (last.ts || 0)) < 120000) return true;
-            return false;
-        }
-
-        // Phase 1 — scan all contacts for story triggers (always runs, ignores cooldowns)
-        const triggered = [];
-        for (const c of contacts) {
-            if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
-            if (isNpcPresent(c.name)) continue;
-            if (hasRecentInteraction(c)) continue;
-            const trigger = detectStoryTrigger(c.name);
-            if (trigger) {
-                triggered.push({ contact: c, trigger });
-            }
-        }
-
-        // Phase 2 — if we have triggered NPCs, pick the highest-intensity one
-        if (triggered.length) {
-            const intensityRank = { high: 3, medium: 2, low: 1 };
-            triggered.sort((a, b) =>
-                (intensityRank[b.trigger.intensity] || 0) - (intensityRank[a.trigger.intensity] || 0)
-            );
-            const winner = triggered[0];
-            const last = winner.contact._lastProactiveTime || 0;
-            if (Date.now() - last >= 120000) {
-                winner.contact._lastProactiveTime = Date.now();
-                const personality = inferPersonality(winner.contact);
-                const shouldCall = winner.trigger.intensity === 'high' && (personality.prefersCall || personality.initiative >= 7);
-                console.log('[PhoneSocial] story-triggered: ' + winner.contact.name + ' ' + winner.trigger.type + ' (' + winner.trigger.intensity + ') → ' + (shouldCall ? 'call' : 'text'));
-                if (shouldCall) {
-                    simulateIncomingCall(winner.contact);
-                } else {
-                    simulateProactiveText(winner.contact, winner.trigger);
-                }
-            }
-            return;
-        }
-
-        // Phase 3 — schedule-driven autonomous messaging (Marinara-style)
-        const scheduleCandidates = [];
-        const legacyCandidates = [];
-        for (const c of contacts) {
-            if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
-            if (isNpcPresent(c.name)) continue;
-            if (!hasAppearedInChat(c.name)) continue;
-            if (hasRecentInteraction(c)) continue;
-            const eligibility = isEligibleBySchedule(c);
-            if (eligibility) {
-                if (!eligibility.eligible) {
-                    if (eligibility.reason === 'offline' || eligibility.reason === 'no_user_msgs') {
-                        continue; // Silent skip
-                    }
-                    continue;
-                }
-                scheduleCandidates.push({ contact: c, eligibility });
-            } else {
-                // No schedule — fall back to legacy personality-based
-                const activity = getCurrentActivity(c);
-                if (activity && activity.noProactive) continue;
-                const personality = inferPersonality(c);
-                const cooldownMs = Math.max(300000, 900000 - personality.initiative * 60000);
-                const last = c._lastProactiveTime || 0;
-                if (Date.now() - last < cooldownMs) continue;
-                if (Math.random() < (personality.initiative / 30)) {
-                    legacyCandidates.push({ contact: c, personality });
-                }
-            }
-        }
-
-        // Prefer schedule-driven, fall back to legacy
-        if (scheduleCandidates.length) {
-            scheduleCandidates.sort((a, b) => (b.eligibility.priority || 0) - (a.eligibility.priority || 0));
-            const winner = scheduleCandidates[0];
-            const e = winner.eligibility;
-            winner.contact._lastProactiveTime = Date.now();
-            // Track follow-up count
-            if (!winner.contact._autonomousMsgs) winner.contact._autonomousMsgs = { count: 0, lastSentAt: 0 };
-            winner.contact._autonomousMsgs.count++;
-            winner.contact._autonomousMsgs.lastSentAt = Date.now();
-            const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
-            const personality = inferPersonality(winner.contact);
-            const shouldCall = personality.prefersCall || (e.talkativeness >= 70 && Math.random() < 0.3);
-            console.log('[PhoneSocial] schedule-driven: ' + winner.contact.name + ' ' + (statusEmoji[e.status] || '') + e.status +
-                ' talk=' + e.talkativeness + ' priority=' + e.priority +
-                ' followup=' + winner.contact._autonomousMsgs.count + '/3 → ' + (shouldCall ? 'call' : 'text'));
-            if (shouldCall) {
-                simulateIncomingCall(winner.contact);
-            } else {
-                simulateProactiveText(winner.contact, null);
-            }
-        } else if (legacyCandidates.length) {
-            legacyCandidates.sort((a, b) => b.personality.initiative - a.personality.initiative);
-            const winner = legacyCandidates[0];
-            winner.contact._lastProactiveTime = Date.now();
-            const shouldCall = winner.personality.prefersCall || (winner.personality.initiative >= 5 && Math.random() < 0.35);
-            const activityLabel = getActivityLabel(winner.contact);
-            console.log('[PhoneSocial] legacy proactive: ' + winner.contact.name + ' initiates ' + (shouldCall ? 'call' : 'text') +
-                ' (initiative=' + winner.personality.initiative + (activityLabel ? ', ' + activityLabel : '') + ')');
-            if (shouldCall) {
-                simulateIncomingCall(winner.contact);
-            } else {
-                simulateProactiveText(winner.contact, null);
-            }
-        }
-    }
-
+    
     // ─── Narrative-triggered proactive check ─────────────────────────
-    // Scans the latest AI message for cues that NPCs are trying to
-    // contact the user (phone blowing up, texting, calling). When found,
-    // immediately triggers calls/texts from implicated contacts,
-    // bypassing the speaker-history gates that require NPCs to have
-    // appeared as senders in the chat (detectStoryTrigger, hasAppearedInChat).
+    // Scans the last several AI messages for cues that NPCs are trying to
+    // contact the user (phone blowing up, texting, calling, "X is calling you").
+    // When found, immediately triggers calls/texts from implicated contacts.
+    // Also scans user messages for call-answering cues ("I pick up", "I answer").
     function checkNarrativeTriggers() {
         try {
             const ctx = getCtx();
@@ -5053,20 +5089,127 @@ function viewAlbums() {
             if (!contacts.length || !state.settings.autoReplies) return;
             if (state.userDnd) return;
 
-            // Get latest AI message (not user)
-            const latestAi = [...ctx.chat].reverse().find(m => !!m && !m.is_user);
-            if (!latestAi) return;
-
-            const text = (latestAi.mes || latestAi.text || '').toLowerCase();
-            if (!text || text.length < 20) return;
+            // ── Scan last 6 messages (both AI and user), newest first ──
+            const recentMsgs = [...ctx.chat].reverse().filter(m => !!m).slice(0, 6);
+            if (!recentMsgs.length) return;
 
             // ── Pattern 1: Generic "phone blowing up" cues ──
-            const phoneBlowingUp = /\b(blowing\s+up\s+your\s+phone|phone\s+(keeps?\s+)?(buzzing|vibrating|ringing|going\s+off)|phone\s+(won'?t\s+stop|hasn'?t\s+stopped)|(missed|ignoring)\s+(a\s+)?(bunch|ton|lots?)\s+of\s+(calls?|texts?|messages?|notifications?)|your\s+phone\s+(is\s+)?(blowing|exploding))\b/i;
+            const phoneBlowingUp = /\b(blowing\s+up\s+your\s+phone|((your|my|her|his|their|the)\s+)?phone\b[^.]{0,120}\b(lit|lights?|lighted|glowed?|glows?|flashed?)\s+up|((your|my|her|his|their|the)\s+)?phone\b[^.]{0,120}\bnotification|phone\s+(keeps?\s+)?(buzzing|vibrating|ringing|going\s+off)|phone\s+(won'?t\s+stop|hasn'?t\s+stopped)|(missed|ignoring)\s+(a\s+)?(bunch|ton|lots?)\s+of\s+(calls?|texts?|messages?|notifications?)|(your|my|her|his|their)\s+phone\s+(is\s+)?(blowing|exploding))\b/i;
 
             // ── Pattern 2: Group reference near communication verbs ──
             const groupPhoneRe = /\b(your\s+(family|parents?|siblings?|friends?|crew|squad|team|group|folks?|people)\s+(has|have|is|are|been|keep|keeps)\s+(texting|calling|messaging|trying\s+to\s+reach|blowing\s+up|hitting\s+up|contacting|checking\s+in|reaching\s+out))\b/i;
 
+            // ── Pattern 3: User answering a call ──
+            const userAnswerRe = /(I\s+(pick\s+up|answer|grab)\s+(the\s+)?(phone|call)|(pick up|answer|get)\s+(the\s+)?phone|(accept|take)\s+the\s+call)/i;
+
+            // ── UIE-STYLE NARRATION SCAN ─────────────────────────────────
+            // Before checking contacts, scan the raw AI narration for phone events.
+            // These work WITHOUT pre-existing contacts — the AI's own narration
+            // drives everything, just like UIE's scanForPhoneEvents.
+            // Scans all 6 recent messages (not just the latest) for phone cues.
+            const uieCallRe = /call\s+incoming\s*(?:from)?\s*[:\-]?\s*([A-Za-z0-9 _'".\-]{2,60})/i;
+            const uieTextRe = /new\s+message\s*(?:from)?\s*[:\-]?\s*([A-Za-z0-9 _'".\-]{2,60})\s*[:\-]\s*([\s\S]{1,600})/i;
+            const uieCallTagRe = /\[\s*UIE_CALL\s*:\s*([^\]]+?)\s*\]/i;
+            const uieTextTagRe = /\[\s*UIE_TEXT\s*:\s*([^|\]]+?)\s*\|\s*([^\]]+?)\s*\]/i;
+
+            // Helper: find or create contact by name
+            const findOrCreateContact = (name) => {
+                const norm = name.trim().toLowerCase();
+                if (!norm || norm.length < 2) return null;
+                // Check existing contacts
+                let c = contacts.find(x => x.name.toLowerCase() === norm);
+                if (c) return c;
+                // Check blocked
+                const blocked = getBlockedSet();
+                if (isBlocked(name, blocked)) return null;
+                // Create new contact — reactive, just like UIE
+                c = {
+                    id: 'npc_' + norm.replace(/[^a-z0-9_]/g, '_'),
+                    name: name.trim(),
+                    number: genNumber(),
+                    schedule: null,
+                    source: 'narration',
+                    starred: false,
+                };
+                state.contacts.push(c);
+                console.log('[PhoneSocial] 📖 UIE-scan: created contact "' + name.trim() + '" from narrative cue');
+                return c;
+            };
+
             let triggeredContacts = [];
+            const alreadyTriggered = new Set();
+
+            // ── UIE PASS: scan raw AI narration for phone events ──
+            for (const msg of recentMsgs) {
+                const rawText = (msg.mes || msg.text || '').trim();
+                if (!rawText || rawText.length < 15) continue;
+
+                // Tagged call: [UIE_CALL: Name]
+                const callTag = rawText.match(uieCallTagRe);
+                if (callTag) {
+                    const who = callTag[1].trim().slice(0, 80);
+                    const c = findOrCreateContact(who);
+                    if (c && !alreadyTriggered.has(c.id)) {
+                        console.log('[PhoneSocial] 📖 UIE-tag: incoming call from ' + who);
+                        triggeredContacts.push(c);
+                        alreadyTriggered.add(c.id);
+                        c._callTriggered = true;
+                    }
+                }
+
+                // Tagged text: [UIE_TEXT: Name | body]
+                const textTag = rawText.match(uieTextTagRe);
+                if (textTag) {
+                    const who = textTag[1].trim().slice(0, 80);
+                    const body = textTag[2].trim().slice(0, 1200);
+                    if (body) {
+                        const c = findOrCreateContact(who);
+                        if (c && !alreadyTriggered.has(c.id)) {
+                            console.log('[PhoneSocial] 📖 UIE-tag: incoming text from ' + who);
+                            // Deliver immediately — don't wait for the trigger loop
+                            if (!state.threads[c.id]) state.threads[c.id] = [];
+                            state.threads[c.id].push({ from: 'them', text: body, ts: Date.now(), seen: false });
+                            saveMeta();
+                            updateSmsInjection();
+                            showIncomingBanner(c, body);
+                            phoneNotify('incoming-sms', '📩 ' + c.name, c.name + ': ' + body.slice(0, 120));
+                        }
+                    }
+                }
+
+                // Plain-language call: "call incoming from Corey"
+                const callPlain = rawText.match(uieCallRe);
+                if (callPlain && !callTag) {
+                    const who = callPlain[1].trim().slice(0, 80);
+                    const c = findOrCreateContact(who);
+                    if (c && !alreadyTriggered.has(c.id)) {
+                        console.log('[PhoneSocial] 📖 UIE-plain: incoming call from ' + who);
+                        triggeredContacts.push(c);
+                        alreadyTriggered.add(c.id);
+                        c._callTriggered = true;
+                    }
+                }
+
+                // Plain-language text: "new message from Corey: Hey what's up"
+                const textPlain = rawText.match(uieTextRe);
+                if (textPlain && !textTag) {
+                    const who = textPlain[1].trim().slice(0, 80);
+                    const body = textPlain[2].trim().slice(0, 1200);
+                    if (body) {
+                        const c = findOrCreateContact(who);
+                        if (c && !alreadyTriggered.has(c.id)) {
+                            console.log('[PhoneSocial] 📖 UIE-plain: incoming text from ' + who);
+                            // Deliver inline — the AI already wrote the message
+                            if (!state.threads[c.id]) state.threads[c.id] = [];
+                            state.threads[c.id].push({ from: 'them', text: body, ts: Date.now(), seen: false });
+                            saveMeta();
+                            updateSmsInjection();
+                            showIncomingBanner(c, body);
+                            phoneNotify('incoming-sms', '📩 ' + c.name, c.name + ': ' + body.slice(0, 120));
+                        }
+                    }
+                }
+            }
 
             // Helper: has this NPC had recent SMS interaction?
             const hasRecent = (c) => {
@@ -5078,54 +5221,89 @@ function viewAlbums() {
                 return false;
             };
 
-            // ── Check 1: Specific contact names near communication verbs ──
-            // "Mom's been texting you", "Dad keeps calling", "Sarah left a voicemail"
-            for (const c of contacts) {
-                if (!c.id || !c.name) continue;
-                if (c.source === 'st-character' || c.source === 'st-group') continue;
-                if (isNpcPresent(c.name)) continue;
-                if (hasRecent(c)) continue;
+            // ── Scan each recent message ──
+            for (const msg of recentMsgs) {
+                const text = (msg.mes || msg.text || '').toLowerCase();
+                if (!text || text.length < 15) continue;
 
-                const nameLower = c.name.toLowerCase();
-                const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-                // Name near a communication verb (within ~50 chars, same sentence)
-                const nameCommsRe = new RegExp(
-                    '\\b' + escaped + '\\b[^.]{0,50}\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out)\\b|' +
-                    '\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out)\\b[^.]{0,50}\\b' + escaped + '\\b',
-                    'i'
-                );
-
-                if (nameCommsRe.test(text)) {
-                    triggeredContacts.push(c);
-                    console.log('[PhoneSocial] 📖 narrative name-match: ' + c.name + ' mentioned with comm verb');
-                }
-            }
-
-            // ── Check 2: Generic phone-blowing-up / group → trigger eligible non-present contacts ──
-            if (triggeredContacts.length === 0 && (phoneBlowingUp.test(text) || groupPhoneRe.test(text))) {
-                const genericMatch = text.match(groupPhoneRe);
-                const groupLabel = genericMatch ? genericMatch[2] : 'contacts';
-                console.log('[PhoneSocial] 📖 narrative generic-cue: phone blowing up / ' + groupLabel + ' reaching out');
-
-                const candidates = [];
+                // ── Check 1: Specific contact names near communication verbs ──
+                // "Mom's been texting you", "Dad keeps calling", "Sarah is calling"
+                // "X is on the phone", "X wants to talk to you"
                 for (const c of contacts) {
                     if (!c.id || !c.name) continue;
                     if (c.source === 'st-character' || c.source === 'st-group') continue;
-                    if (isNpcPresent(c.name)) continue;
+                    // For explicit "X is calling/texting" narrative cues, only suppress
+                    // contacts who are actual speakers in the scene. The default
+                    // narration-aware presence check would see the cue's own name mention
+                    // and incorrectly block the intended trigger.
+                    if (isNpcPresent(c.name, { narration: false })) continue;
+                    if (state.mutedContacts[c.id]) continue;
                     if (hasRecent(c)) continue;
-                    candidates.push(c);
+                    if (alreadyTriggered.has(c.id)) continue;
+
+                    const nameLower = c.name.toLowerCase();
+                    const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+                    // Comms verbs close to name
+                    const nameCommsRe = new RegExp(
+                        '\\b' + escaped + '\\b[^.]{0,80}\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out|on\\s+the\\s+phone|wants\\s+to\\s+(talk|speak)|left\\s+a\\s+(message|voicemail))\\b|' +
+                        '\\b(texts?|texting|texted|calls?|calling|called|voicemail|messages?|messaging|messaged|trying\\s+to\\s+reach|reach\\s+out|hit\\s+up|DM|DMed|contacting|checking\\s+in|reaching\\s+out|on\\s+the\\s+phone|wants\\s+to\\s+(talk|speak)|left\\s+a\\s+(message|voicemail))\\b[^.]{0,80}\\b' + escaped + '\\b',
+                        'i'
+                    );
+
+                    if (nameCommsRe.test(text)) {
+                        triggeredContacts.push(c);
+                        alreadyTriggered.add(c.id);
+                        console.log('[PhoneSocial] 📖 narrative name-match: ' + c.name + ' mentioned with comm verb');
+                    }
                 }
 
-                if (candidates.length) {
-                    // Pick 1-2 random candidates
-                    const count = Math.min(candidates.length, Math.random() < 0.5 ? 1 : 2);
-                    for (let i = candidates.length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+                // ── Check 2: Generic phone-blowing-up / group → trigger eligible contacts ──
+                if (triggeredContacts.length === 0 && (phoneBlowingUp.test(text) || groupPhoneRe.test(text))) {
+                    const genericMatch = text.match(groupPhoneRe);
+                    const groupLabel = genericMatch ? genericMatch[2] : 'contacts';
+                    console.log('[PhoneSocial] 📖 narrative generic-cue: phone blowing up / ' + groupLabel + ' reaching out');
+
+                    const candidates = [];
+                    for (const c of contacts) {
+                        if (!c.id || !c.name) continue;
+                        if (c.source === 'st-character' || c.source === 'st-group') continue;
+                        if (isNpcPresent(c.name)) continue;
+                        if (state.mutedContacts[c.id]) continue;
+                        if (hasRecent(c)) continue;
+                        candidates.push(c);
                     }
-                    triggeredContacts = candidates.slice(0, count);
+
+                    if (candidates.length) {
+                        const count = Math.min(candidates.length, Math.random() < 0.5 ? 1 : 2);
+                        for (let i = candidates.length - 1; i > 0; i--) {
+                            const j = Math.floor(Math.random() * (i + 1));
+                            [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+                        }
+                        triggeredContacts = candidates.slice(0, count);
+                    }
                 }
+
+                // ── Check 3: User answered a phone — if there's an incoming call, auto-answer it ──
+                if (msg.is_user && userAnswerRe.test(text) && state.activeCall && state.activeCall.status === 'incoming') {
+                    console.log('[PhoneSocial] 📖 user answered the phone — auto-answering incoming call');
+                    if (state.activeCall._autoDeclineTimer) {
+                        clearTimeout(state.activeCall._autoDeclineTimer);
+                    }
+                    const ansContact = state.contacts.find(c => c.id === state.activeCall.contactId);
+                    state.activeCall.status = 'connected';
+                    state.activeCall.startTs = Date.now();
+                    state.callLog.push({ contactId: state.activeCall.contactId, dir: 'answered', ts: Date.now(), duration: 0 });
+                    saveMeta();
+                    render();
+                    startCallTimer();
+                    if (ansContact) {
+                        phoneTtsSpeak(`Call answered`, ansContact.name);
+                    }
+                }
+
+                // Stop scanning once we have triggered contacts
+                if (triggeredContacts.length >= 2) break;
             }
 
             if (!triggeredContacts.length) return;
@@ -5136,19 +5314,199 @@ function viewAlbums() {
             // ── Execute: trigger calls/texts from matched contacts ──
             for (const c of triggeredContacts) {
                 const personality = inferPersonality(c);
-                const shouldCall = personality.prefersCall || (personality.initiative >= 7 && Math.random() < 0.4);
+                const shouldCall = c._callTriggered || personality.prefersCall || (personality.initiative >= 7 && Math.random() < 0.4);
+                delete c._callTriggered; // Clean up transient flag
                 c._lastProactiveTime = Date.now();
 
                 console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + ' (AI mentioned contact activity)');
 
                 if (shouldCall) {
-                    simulateIncomingCall(c);
+                    simulateIncomingCall(c, { skipPresenceCheck: true });
                 } else {
-                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' });
+                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: true });
                 }
             }
         } catch (e) {
             console.warn('[PhoneSocial] checkNarrativeTriggers error:', e);
+        }
+    }
+
+    // ─── Inline SMS Ingestion ───────────────────────────────────────
+    // Scans AI narration for inline SMS content ("Mom: Come home after class.")
+    // and ingests them into PhoneSocial threads. Creates contacts if needed.
+    function ingestInlineSMS() {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat || !Array.isArray(ctx.chat) || !ctx.chat.length) {
+                console.log('[PhoneSocial] 🔍 inline SMS: ctx.chat missing/empty');
+                return;
+            }
+            const last = ctx.chat[ctx.chat.length - 1];
+            if (!last || last.is_user) {
+                console.log('[PhoneSocial] 🔍 inline SMS: last msg is ' + (!last ? 'NULL' : 'USER — skipping'));
+                return;
+            }
+            const text = (last.mes || '').trim();
+            if (!text || text.length < 20) {
+                console.log('[PhoneSocial] 🔍 inline SMS: msg text too short (' + (text ? text.length : 0) + ' chars)');
+                return;
+            }
+
+            // Debug: log what we're scanning
+            console.log('[PhoneSocial] 🔍 scanning AI msg for inline SMS (' + text.length + ' chars), starts: ' +
+                JSON.stringify(text.slice(0, 150)));
+
+            // Match "Name: message content" patterns — flexible about leading whitespace
+            // Name must start with uppercase, 1-3 words, followed by colon and plain text (not quoted dialogue)
+            const smsRe = /^\s*([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2}):\s+(?!["\u201C\u201D\u2018\u2019])(.+)$/gm;
+            const matches = [];
+            let m;
+            while ((m = smsRe.exec(text)) !== null) {
+                const sender = m[1].trim();
+                const msgText = m[2].trim();
+                // Skip very short fragments or lines that look like narration
+                if (msgText.length < 3) continue;
+                // Skip if the message is in quotes (dialogue, not SMS)
+                if (/^["\u201C].*["\u201D]$/.test(msgText)) continue;
+                matches.push({ sender, text: msgText });
+            }
+
+            if (!matches.length) {
+                console.log('[PhoneSocial] 🔍 inline SMS: regex matched 0 lines');
+                return;
+            }
+            console.log('[PhoneSocial] 🔍 inline SMS: regex matched ' + matches.length + ' line(s) — ' +
+                matches.map(x => x.sender).join(', '));
+
+            // Only process if multiple SMS lines or an existing contact is involved.
+            // BUT: always create a new contact for a single-match with a proper name.
+            const involvedNames = [...new Set(matches.map(x => x.sender.toLowerCase()))];
+            const hasExistingContact = involvedNames.some(name =>
+                state.contacts.some(c => c.name.toLowerCase() === name)
+            );
+            if (!hasExistingContact && matches.length < 2) {
+                // Single match, no existing contact — still ingest if it's a proper name
+                const singleSender = matches[0].sender;
+                if (singleSender.length < 2 || singleSender[0] !== singleSender[0].toUpperCase()) {
+                    console.log('[PhoneSocial] 🔍 inline SMS: single match for non-proper-name "' + singleSender + '" — skipping');
+                    return;
+                }
+                console.log('[PhoneSocial] 🔍 inline SMS: single match for new contact "' + singleSender + '" — will create');
+            }
+
+            let ingested = 0;
+            for (const { sender, text: msgText } of matches) {
+                const nameLower = sender.toLowerCase();
+                let contact = state.contacts.find(c => c.name.toLowerCase() === nameLower);
+
+                if (!contact) {
+                    // Create contact if the name looks like a proper name (capitalized, 2+ chars)
+                    if (sender.length < 2 || sender[0] !== sender[0].toUpperCase()) continue;
+                    const blocked = getBlockedSet();
+                    if (isBlocked(sender, blocked)) continue;
+                    contact = {
+                        id: 'npc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+                        name: sender,
+                        number: '',
+                        source: 'narrative-sms',
+                        memories: []
+                    };
+                    state.contacts.push(contact);
+                    console.log('[PhoneSocial] 📱 new contact from inline SMS: ' + sender);
+                }
+
+                if (!state.threads[contact.id]) state.threads[contact.id] = [];
+                // Avoid exact duplicates (same text within last 5 messages)
+                const recent = state.threads[contact.id].slice(-5);
+                const isDup = recent.some(x => x.from === 'them' && x.text === msgText);
+                if (isDup) continue;
+
+                state.threads[contact.id].push({
+                    from: 'them',
+                    text: msgText,
+                    ts: Date.now(),
+                    seen: false
+                });
+                ingested++;
+            }
+
+            if (ingested > 0) {
+                console.log('[PhoneSocial] 📱 ingested ' + ingested + ' inline SMS from chat narrative');
+                saveMeta();
+                updateSmsInjection();
+            }
+        } catch (e) {
+            console.warn('[PhoneSocial] ingestInlineSMS error:', e);
+        }
+    }
+
+    // ─── Inline SMS Reply from Main Chat ────────────────────────────
+    // Detects `/text <Contact Name> <message>` in user messages and pushes
+    // the message into the contact's thread as a user SMS reply.
+    // Contact matching is longest-name-first to handle multi-word names.
+    function handleInlineSMSReply(userText) {
+        try {
+            const prefix = '/text ';
+            if (!userText || !userText.startsWith(prefix)) return;
+            const rest = userText.slice(prefix.length).trim();
+            if (!rest) return;
+
+            // Longest-name-first matching (case-insensitive)
+            let bestContact = null;
+            let bestMatchLen = 0;
+            const lowerRest = rest.toLowerCase();
+            for (const c of state.contacts) {
+                const lowerName = c.name.toLowerCase();
+                if (lowerRest.startsWith(lowerName)) {
+                    const nameLen = c.name.length;
+                    const nextChar = rest[nameLen];
+                    // Require word boundary: space, end-of-string, or newline
+                    if (nextChar === ' ' || nextChar === undefined || nextChar === '\n') {
+                        if (nameLen > bestMatchLen) {
+                            bestMatchLen = nameLen;
+                            bestContact = c;
+                        }
+                    }
+                }
+            }
+
+            if (!bestContact) {
+                console.log('[PhoneSocial] 📱 inline SMS reply: no contact matched from "' +
+                    rest.slice(0, 30) + '"');
+                if (typeof toastr !== 'undefined') {
+                    toastr.warning('Contact not found. Use /text <Contact Name> <message>', 'PhoneSocial');
+                }
+                return;
+            }
+
+            const msgText = rest.slice(bestMatchLen).trim();
+            if (!msgText) {
+                console.log('[PhoneSocial] 📱 inline SMS reply: empty message after contact name');
+                if (typeof toastr !== 'undefined') {
+                    toastr.warning('No message text after contact name.', 'PhoneSocial');
+                }
+                return;
+            }
+
+            // Push to thread
+            if (!state.threads[bestContact.id]) state.threads[bestContact.id] = [];
+            state.threads[bestContact.id].push({
+                from: 'me',
+                text: msgText,
+                ts: Date.now(),
+                seen: false
+            });
+
+            saveMeta();
+            updateSmsInjection();
+
+            if (typeof toastr !== 'undefined') {
+                toastr.success('SMS sent to ' + bestContact.name, 'PhoneSocial');
+            }
+            console.log('[PhoneSocial] 📱 inline SMS reply → ' + bestContact.name + ': ' +
+                msgText.slice(0, 60));
+        } catch (e) {
+            console.warn('[PhoneSocial] handleInlineSMSReply error:', e);
         }
     }
 
@@ -5182,7 +5540,7 @@ function viewAlbums() {
                 ? thread.slice(-6).map(m => ({
                     ts: m.ts || 0,
                     speaker: m.from === 'me' ? myName : contact.name,
-                    text: m.imageUrl ? '[Photo]' : (m.text || ''),
+                    text: m.imageUrl ? '📷 Photo' : (m.text || ''),
                     channel: 'SMS'
                 }))
                 : [];
@@ -5842,12 +6200,16 @@ Rules:
             // that the model leaks from ST context (even after the prompt tells it not to).
             const blockedNames = getBlockedSet();
             const blockedPatterns = [];
-            for (const b of blockedNames) {
-                if (b.length > 2) blockedPatterns.push(b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+            const blockedEntries = blockedNames instanceof Set ? blockedNames : blockedNames?.set;
+            if (blockedEntries) {
+                for (const b of blockedEntries) {
+                    if (b.length > 2) blockedPatterns.push(b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                }
             }
             // Also catch common supernatural traits that leak from assistant character cards
             blockedPatterns.push('incubus', 'succubus', 'demon', 'horns', 'wings', 'tail');
             const hardFilter = new RegExp(blockedPatterns.join('|'), 'i');
+
             const beforeFilter = posts.length;
             const filteredPosts = posts.filter(p =>
                 !hardFilter.test(p.text) &&
@@ -6082,9 +6444,162 @@ Rules:
     // Returns the in-chat time from the last message's send_date, falling
     // back to real system time. Prevents schedules from showing "lunch break"
     // when the story is at midnight.
+    // ─── Story Time Inference ────────────────────────────────────────
+    // Scans AI-generated messages for narrative time cues ("the next morning",
+    // "two hours later", etc.) and tracks story time independently of RPG Companion.
+    // Only updates on NEW AI messages, and only when time has actually changed.
+    function detectAndStoreStoryTime() {
+        try {
+            const ctx = getCtx();
+            if (!ctx?.chat || !Array.isArray(ctx.chat) || !ctx.chat.length) return;
+            const last = ctx.chat[ctx.chat.length - 1];
+            if (!last || last.is_user) return;
+            const text = (last.mes || '').trim();
+            if (!text) return;
+            const msgIndex = ctx.chat.length - 1;
+            const meta = getChatMeta();
+            if (!meta) return;
+            const prev = meta.storyTime;
+            if (prev && prev.lastMsgIndex === msgIndex) return;
+
+            const currentTime = prev && prev.timestamp
+                ? new Date(prev.timestamp)
+                : getChatTime();
+            const inferred = inferTimeFromText(text, currentTime);
+            if (inferred) {
+                meta.storyTime = {
+                    timestamp: inferred.toISOString(),
+                    source: 'inferred',
+                    lastMsgIndex: msgIndex
+                };
+                console.log('[PhoneSocial] 🕐 story time: ' +
+                    inferred.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) +
+                    ' (' + inferred.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + ')');
+                saveMeta();
+            }
+        } catch (e) {
+            console.warn('[PhoneSocial] detectAndStoreStoryTime error:', e);
+        }
+    }
+
+    // Pattern-based time inference from narrative text. Returns a Date if a time
+    // change is detected, null if no time cue found (time hasn't moved).
+    function inferTimeFromText(text, currentTime) {
+        const t = text.slice(0, 1500).toLowerCase();
+        const d = new Date(currentTime);
+
+        // Absolute time of day: "at 3:00 PM", "around 11:30 am"
+        const absTime = t.match(/\b(at|around|by|about)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i);
+        if (absTime) {
+            let h = parseInt(absTime[2]);
+            const m = absTime[3] ? parseInt(absTime[3]) : 0;
+            const ampm = (absTime[4] || '').toLowerCase();
+            if (ampm.startsWith('p') && h < 12) h += 12;
+            if (ampm.startsWith('a') && h === 12) h = 0;
+            d.setHours(h, m, 0, 0);
+            if (d <= currentTime) d.setDate(d.getDate() + 1);
+            return d;
+        }
+
+        // "the next morning" / "the following morning"
+        if (/\bthe\s+(next|following)\s+morning\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            d.setHours(8, 0, 0, 0);
+            return d;
+        }
+
+        // "the next day" / "the following day"
+        if (/\bthe\s+(next|following)\s+day\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            return d;
+        }
+
+        // "X hours later"
+        const hoursLater = t.match(/\b(\d+)\s+hours?\s+later\b/i);
+        if (hoursLater) {
+            d.setHours(d.getHours() + parseInt(hoursLater[1]));
+            return d;
+        }
+
+        // "X minutes later"
+        const minsLater = t.match(/\b(\d+)\s+minutes?\s+later\b/i);
+        if (minsLater) {
+            d.setMinutes(d.getMinutes() + parseInt(minsLater[1]));
+            return d;
+        }
+
+        // "later that evening" / "later that night"
+        if (/\blater\s+that\s+evening\b/i.test(t)) { d.setHours(20, 0, 0, 0); return d; }
+        if (/\blater\s+that\s+night\b/i.test(t)) { d.setHours(22, 0, 0, 0); return d; }
+
+        // "that evening" / "that night" / "that afternoon"
+        if (/\bthat\s+evening\b/i.test(t)) { d.setHours(19, 0, 0, 0); return d; }
+        if (/\bthat\s+night\b/i.test(t)) { d.setHours(22, 0, 0, 0); return d; }
+        if (/\bthat\s+afternoon\b/i.test(t)) { d.setHours(14, 0, 0, 0); return d; }
+
+        // "the following afternoon"
+        if (/\bthe\s+following\s+afternoon\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            d.setHours(14, 0, 0, 0);
+            return d;
+        }
+
+        // "at midnight"
+        if (/\bat\s+midnight\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        }
+
+        // "at dawn" / "at sunrise" / "first light"
+        if (/\bat\s+(dawn|sunrise|first\s+light)\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            d.setHours(6, 0, 0, 0);
+            return d;
+        }
+
+        // "the sun had set" / "darkness fell"
+        if (/\bthe\s+sun\s+(had|was)\s+set/i.test(t) || /\bdarkness\s+fell\b/i.test(t)) {
+            d.setHours(20, 0, 0, 0);
+            return d;
+        }
+
+        // "hours passed" / "several hours"
+        if (/\bhours\s+passed\b/i.test(t) || /\bseveral\s+hours\b/i.test(t)) {
+            d.setHours(d.getHours() + 3);
+            return d;
+        }
+
+        // "a few minutes later" / "moments later"
+        if (/\ba\s+few\s+minutes\s+later\b/i.test(t) || /\bmoments?\s+later\b/i.test(t)) {
+            d.setMinutes(d.getMinutes() + 15);
+            return d;
+        }
+
+        // "a while later" / "some time later"
+        if (/\b(a\s+while|some\s+time)\s+later\b/i.test(t)) {
+            d.setHours(d.getHours() + 1);
+            return d;
+        }
+
+        // "morning came" / "morning arrived" / "morning broke"
+        if (/\bmorning\s+(came|arrived|broke)\b/i.test(t)) {
+            d.setDate(d.getDate() + 1);
+            d.setHours(7, 0, 0, 0);
+            return d;
+        }
+
+        return null;
+    }
+
     function getChatTime() {
         try {
             const ctx = getCtx();
+            const meta = getChatMeta();
+            if (meta?.storyTime?.timestamp) {
+                const ts = new Date(meta.storyTime.timestamp);
+                if (!isNaN(ts.getTime())) return ts;
+            }
             // ── Priority 1: RPG Companion in-game time ──
             const rpgData = ctx?.chatMetadata?.rpg_companion;
             if (rpgData) {
@@ -6189,47 +6704,6 @@ Rules:
     function scheduleNeedsRefresh(schedule) {
         if (!schedule || !schedule.weekStart) return true;
         return getMonday().getTime() > new Date(schedule.weekStart).getTime();
-    }
-
-    // ── Auto-refresh schedules on new messages ──
-    // When an AI message mentions NPCs, regenerate their schedules so they
-    // stay current with story events. Cooldown prevents per-message spam.
-    let _scheduleRegenCooldown = {};  // { contactName: timestamp }
-    const SCHEDULE_REGEN_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
-    function autoRefreshSchedules() {
-        try {
-            const ctx = getCtx();
-            const chat = ctx?.chat;
-            if (!Array.isArray(chat) || !chat.length) return;
-            const last = chat[chat.length - 1];
-            if (!last || last.is_user) return; // Only AI messages trigger refresh
-            const content = ((last.mes || last.text || '')).toLowerCase();
-            if (!content) return;
-            const now = Date.now();
-            const toRegen = [];
-            for (const c of state.contacts) {
-                if (!c.id || c.source === 'st-character' || c.source === 'st-group') continue;
-                if (!c.schedule || !c.schedule.days) continue; // No schedule to refresh
-                const nameLower = c.name.toLowerCase();
-                // Word-boundary match to avoid "Gaz" matching "gaze"
-                const escaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const re = new RegExp('\\b' + escaped + '\\b');
-                if (!re.test(content)) continue;
-                // Cooldown check
-                const lastRegen = _scheduleRegenCooldown[c.name] || 0;
-                if (now - lastRegen < SCHEDULE_REGEN_COOLDOWN_MS) continue;
-                toRegen.push(c);
-            }
-            if (!toRegen.length) return;
-            console.log('[PhoneSocial] 🔄 auto-refreshing schedules for: ' + toRegen.map(c => c.name).join(', '));
-            // Stagger: one every 3s to avoid rate limits
-            let delay = 1000;
-            for (const c of toRegen) {
-                _scheduleRegenCooldown[c.name] = now;
-                setTimeout(() => generateSchedule(c.id), delay);
-                delay += 3000;
-            }
-        } catch (_) {}
     }
 
     function parseScheduleResponse(content) {
@@ -6577,56 +7051,86 @@ Rules:
         if (!hasSchedule) {
             return '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
                 '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>' +
-                '<p style="font-size:12px;color:#8e8e93;margin:0 0 8px">No schedule generated yet. Generate a weekly schedule to control when this NPC can reach out.</p>' +
+                '<p style="font-size:12px;color:#8e8e93;margin:0 0 8px">No schedule generated yet.</p>' +
                 '<button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:#007aff;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer">⚡ Generate Schedule</button>';
         }
         const s = contact.schedule;
-        const stale = scheduleNeedsRefresh(s);
         const now = getCurrentScheduleStatus(s);
-        // ── In-scene override: speaker-only — green banner only for NPCs
-        // who actually have speaking lines. Narration mentions from ensemble
-        // cards are used for proactive blocking, not the green banner.
-        const inScene = isNpcPresent(contact.name, {narration: false});
-        const displayStatus = inScene ? 'online' : (now ? now.status : 'online');
-        const displayActivity = inScene ? 'with you right now' : (now ? now.activity : 'unknown');
-        const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
-        const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
-        const nowStatus = displayStatus;
-        const nowActivity = displayActivity;
-        let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
-            '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
-        if (inScene) {
-            html += '<div style="background:#e8f5e9;border-radius:8px;padding:6px 10px;margin-bottom:10px;font-size:11px;color:#2e7d32">' +
-                '📍 Present in chat — schedule overridden to ONLINE</div>';
-        }
-        if (stale) {
-            html += '<div style="background:#fff3cd;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#856404">' +
-                '⚠️ Schedule is from a previous week. <button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:none;color:#007aff;font-size:11px;cursor:pointer;padding:0;text-decoration:underline">Regenerate</button></div>';
-        }
-        html += '<div style="background:#f2f2f7;border-radius:10px;padding:10px;margin-bottom:8px">' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
-            '<span style="font-size:16px">' + (statusEmoji[nowStatus] || '') + '</span>' +
-            '<span style="font-size:13px;font-weight:600;color:#1c1c1e">' + nowStatus.toUpperCase() + '</span>' +
-            '<span style="font-size:12px;color:#8e8e93">— ' + escape(nowActivity) + '</span></div>' +
-            '<div style="font-size:11px;color:#8e8e93">Talkativeness: ' + (s.talkativeness || 50) + '/100 • Reaches out after ' + (s.inactivityThresholdMinutes || 120) + 'min</div></div>';
-        // 7-day compact grid
         const chatNow = getChatTime();
         const todayIdx = (chatNow.getDay() + 6) % 7;
-        html += '<div style="display:flex;flex-direction:column;gap:4px;font-size:10px;max-height:200px;overflow-y:auto">';
+        const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
+        const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
+
+        // Selected day (default: today)
+        const selDay = state.scheduleSelectedDay || DAYS[todayIdx];
+        const selBlocks = Array.isArray(s.days[selDay]) ? s.days[selDay] : [];
+
+        // ── Status card ──
+        const nowStatus = now ? now.status : 'online';
+        const nowActivity = now ? now.activity : 'unknown';
+        const talkPct = Math.min(100, Math.max(0, s.talkativeness || 50));
+        let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
+            '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
+        html += '<div class="ps-schedule-status-card">' +
+            '<span class="ps-schedule-status-icon">' + (statusEmoji[nowStatus] || '') + '</span>' +
+            '<span class="ps-schedule-status-label">' + nowStatus.toUpperCase() + ' — ' + escape(nowActivity) + '</span>' +
+            '<div class="ps-schedule-talk-bar"><div class="ps-schedule-talk-fill" style="width:' + talkPct + '%"></div></div>' +
+            '</div>';
+
+        // ── Day selector pills ──
+        html += '<div class="ps-schedule-pills">';
         for (let i = 0; i < 7; i++) {
             const day = DAYS[i];
             const blocks = Array.isArray(s.days[day]) ? s.days[day] : [];
             const isToday = i === todayIdx;
-            const dotColors = blocks.slice(0, 8).map(b => '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (statusColors[b.status] || '#ccc') + ';margin-right:1px" title="' + escape(b.time + ' ' + b.activity) + '"></span>').join('');
-            const timePreview = blocks.slice(0, 3).map(b => '<span style="color:#8e8e93">' + escape(b.time) + '</span>').join(' ');
-            html += '<div style="display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:4px' + (isToday ? ';background:#e8f0fe' : '') + '">' +
-                '<span style="width:40px;font-weight:' + (isToday ? '600' : '400') + ';color:#1c1c1e">' + day.slice(0, 3) + '</span>' +
-                '<span style="flex:1">' + dotColors + '</span>' +
-                '<span style="font-size:9px">' + timePreview + '</span></div>';
+            const isSelected = day === selDay;
+            const dots = blocks.slice(0, 4).map(b =>
+                '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (statusColors[b.status] || '#ccc') + ';margin:1px 0 0 1px"></span>'
+            ).join('');
+            html += '<button data-act="schedule-day" data-day="' + day + '" class="ps-schedule-pill' +
+                (isSelected ? ' ps-schedule-pill-sel' : '') + (isToday ? ' ps-schedule-pill-today' : '') + '">' +
+                '<span>' + day.slice(0, 3) + '</span>' +
+                '<span class="ps-schedule-pill-dots">' + dots + '</span></button>';
+        }
+        html += '</div>';
+
+        // ── Block timeline ──
+        html += '<div class="ps-schedule-blocks">';
+        if (selBlocks.length) {
+            // Calculate NOW position for today
+            let nowMarker = '';
+            if (selDay === DAYS[todayIdx] && selBlocks.length) {
+                const firstBlock = selBlocks[0];
+                const lastBlock = selBlocks[selBlocks.length - 1];
+                const firstMin = timeToMinutes(firstBlock.time.split('-')[0]);
+                const lastEndMin = timeToMinutes(lastBlock.time.split('-')[1]);
+                const nowMin = chatNow.getHours() * 60 + chatNow.getMinutes();
+                if (nowMin >= firstMin && nowMin <= lastEndMin) {
+                    const total = lastEndMin - firstMin || 1;
+                    const pct = ((nowMin - firstMin) / total) * 100;
+                    const timeLabel = chatNow.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    nowMarker = '<div class="ps-schedule-now" style="top:' + pct.toFixed(1) + '%"><span>NOW ' + timeLabel + '</span></div>';
+                }
+            }
+            html += nowMarker;
+            for (const block of selBlocks) {
+                html += '<div class="ps-schedule-block">' +
+                    '<span class="ps-schedule-block-time">' + escape(block.time) + '</span>' +
+                    '<span class="ps-schedule-block-dot" style="background:' + (statusColors[block.status] || '#ccc') + '"></span>' +
+                    '<span class="ps-schedule-block-activity">' + escape(block.activity) + '</span>' +
+                    '<span class="ps-schedule-block-status">' + (block.status || '').toUpperCase() + '</span></div>';
+            }
+        } else {
+            html += '<p class="ps-empty" style="font-size:12px;color:#8e8e93;padding:12px">No blocks for ' + selDay + '.</p>';
         }
         html += '</div>';
         html += '<div style="margin-top:10px"><button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:1px solid #007aff;color:#007aff;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer">🔄 Regenerate Schedule</button></div>';
         return html;
+    }
+
+    function timeToMinutes(t) {
+        const parts = (t || '').split(':');
+        return (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
     }
 
     // -------------------------------------------------------------------
@@ -6720,8 +7224,6 @@ Rules:
                 // (cleans up cross-chat bleed from corrupted metadata)
                 purgeStaleContacts();
                 saveMeta();
-                // Start proactive NPC cycle for this chat
-                startProactiveCycle();
             } catch (e) {
                 console.error('[PhoneSocial] onChatChanged error:', e);
             }
@@ -6740,21 +7242,32 @@ Rules:
                 try {
                     // Track last user message for inactivity-based scheduling
                     const chat = ctx.chat;
+                    let lastMsg = null;
                     if (Array.isArray(chat) && chat.length) {
-                        const last = chat[chat.length - 1];
-                        if (last && last.is_user) {
+                        lastMsg = chat[chat.length - 1];
+                        if (lastMsg && lastMsg.is_user) {
                             state.lastUserMessageAt = Date.now();
-                            // Reset follow-up counts when user replies — they're back
                             for (const c of state.contacts) {
                                 if (c._autonomousMsgs) c._autonomousMsgs.count = 0;
                             }
+                            // ── Inline SMS reply from main chat ──
+                            handleInlineSMSReply(lastMsg.mes);
                         }
                     }
                     harvestNPCs();
                     purgeStaleContacts();
                     saveMeta();
-                    // ── Auto-refresh schedules when NPCs appear in new messages ──
-                    autoRefreshSchedules();
+                    // ── Story time + SMS ingestion from AI narrative ──
+                    // Delayed 500ms so ctx.chat has the new message (same as narrative triggers)
+                    console.log('[PhoneSocial] 📨 MESSAGE_RECEIVED — lastMsg:',
+                        lastMsg ? (lastMsg.is_user ? 'USER' : (lastMsg.is_system ? 'SYSTEM' : 'AI')) : 'NULL',
+                        lastMsg ? 'name=' + (lastMsg.name || '?') : '');
+                    if (lastMsg && !lastMsg.is_user) {
+                        setTimeout(() => {
+                            detectAndStoreStoryTime();
+                            ingestInlineSMS();
+                        }, 500);
+                    }
                     // ── Narrative-triggered proactive check ──
                     // Scan latest AI message for cues like "your phone's blowing up"
                     // and immediately fire calls/texts from implicated NPCs.

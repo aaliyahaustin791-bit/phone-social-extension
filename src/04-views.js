@@ -194,6 +194,44 @@
             if (input) { input.value = composeDraft; input.focus(); }
         }
 
+        // Wire up TTS voice input in profile — save on change
+        const ttsInput = panel.querySelector('#ps-tts-voice');
+        if (ttsInput && !ttsInput._wired) {
+            ttsInput._wired = true;
+            ttsInput.addEventListener('change', () => {
+                const id = ttsInput.getAttribute('data-id');
+                const contact = state.contacts.find(c => c.id === id);
+                if (!contact) return;
+                const newVoice = (ttsInput.value || '').trim();
+                contact.ttsVoice = newVoice || undefined;
+                saveMeta();
+                console.log('[PhoneSocial] 🎤 TTS voice for ' + contact.name + ': ' + (newVoice || '(default)'));
+            });
+        }
+
+        // Click-outside-to-close for ⋮ menus (wire once)
+        if (!panel._menuOutsideWired) {
+            panel._menuOutsideWired = true;
+            document.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target.closest('.ps-menu-dropdown') || target.closest('[data-act="toggle-menu"]')) return;
+                document.querySelectorAll('.ps-menu-dropdown').forEach(d => d.style.display = 'none');
+            });
+        }
+
+        // Unlock audio autoplay on first user interaction (mobile browsers)
+        if (!panel._audioUnlocked) {
+            panel._audioUnlocked = true;
+            const unlock = () => {
+                const tmp = new Audio();
+                tmp.play().catch(() => {});
+                document.removeEventListener('pointerdown', unlock);
+                document.removeEventListener('touchstart', unlock);
+            };
+            document.addEventListener('pointerdown', unlock, { once: true });
+            document.addEventListener('touchstart', unlock, { once: true });
+        }
+
         // Wire up close button once per render using the shared doClose handler
         const closeBtn = panel.querySelector('#ps-close-btn');
         if (closeBtn) {
@@ -864,7 +902,7 @@ CRITICAL RULES:
             return d.toLocaleDateString([], { month:'short', day:'numeric' });
         };
 
-        // Build message list with date dividers
+        // Build message list with date dividers + per-message read receipts
         let lastDate = '';
         const msgHtml = msgs.map((m, i) => {
             const curDate = fmtDate(m.ts);
@@ -872,6 +910,12 @@ CRITICAL RULES:
             lastDate = curDate;
             const time = fmtTime(m.ts);
             const isImage = !!m.imageUrl;
+            // Per-message delivery receipt for user messages
+            const receipt = m.from === 'me'
+                ? (m.seen
+                    ? '<span class="ps-msg-receipt ps-read">Read</span>'
+                    : '<span class="ps-msg-receipt">Delivered</span>')
+                : '';
             return `
                 ${divider}
                 <div class="ps-msg ps-${m.from}${isImage ? ' ps-msg-img' : ''}">
@@ -881,20 +925,9 @@ CRITICAL RULES:
                     <button data-act="delete-msg" data-id="${c.id}" data-msg-index="${i}" type="button" class="ps-msg-del" title="Delete message">×</button>
                 </div>
                 <span class="ps-msg-time ${m.from}">${time}</span>
+                ${receipt}
             `;
         }).join('');
-
-        // iMessage-style read receipt for the LAST user message
-        let receipt = '';
-        const lastMeMsg = msgs.reduce((acc, m, i) => m.from === 'me' ? { index: i, msg: m } : acc, null);
-        if (lastMeMsg) {
-            const seenTime = lastMeMsg.msg.seen
-                ? new Date(lastMeMsg.msg.ts).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' })
-                : '';
-            receipt = lastMeMsg.msg.seen
-                ? `<div class="ps-receipt ps-seen">Seen ${seenTime}</div>`
-                : '<div class="ps-receipt">Delivered</div>';
-        }
 
         return `
             <div class="ps-thread-head">
@@ -904,11 +937,15 @@ CRITICAL RULES:
                     <b style="color:#f2f2f7;font-size:15px">${escape(c.name)}</b>
                     ${isTyping ? '<div style="font-size:11px;color:#34c759">typing…</div>' : ''}
                 </div>
-                <div class="ps-thread-actions">
-                    <button data-act="toggle-star" data-id="${c.id}" title="${c.starred ? 'Unstar' : 'Star'}" style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px 6px">${c.starred ? '★' : '☆'}</button>
-                    <button data-act="open-profile" data-id="${c.id}" title="Contact Profile">📋</button>
-                    <button data-act="call" data-id="${c.id}">📞</button>
-                    <button data-act="delete-thread" data-id="${c.id}" type="button" title="Delete conversation" style="background:rgba(255,69,58,0.15);color:#ff453a;border:none;border-radius:50%;width:34px;height:34px;font-size:16px;cursor:pointer">🗑️</button>
+                <div class="ps-thread-actions" style="position:relative">
+                    <button data-act="toggle-menu" data-id="${c.id}" data-context="thread" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px 8px;color:#8e8e93;line-height:1">⋮</button>
+                    <div class="ps-menu-dropdown" id="ps-menu-${c.id}" style="display:none;position:absolute;right:0;top:100%;background:#2c2c2e;border-radius:10px;padding:4px 0;min-width:160px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,0.4)">
+                        <button data-act="toggle-mute" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${state.mutedContacts[c.id] ? '🔔' : '🔕'} ${state.mutedContacts[c.id] ? 'Unmute' : 'Mute'}</button>
+                        <button data-act="toggle-star" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${c.starred ? '★' : '☆'} ${c.starred ? 'Unstar' : 'Star'}</button>
+                        <button data-act="open-profile" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">📋 Profile</button>
+                        <button data-act="call" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">📞 Call</button>
+                        <button data-act="delete-thread" data-id="${c.id}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#ff453a;font-size:14px;text-align:left;cursor:pointer">🗑️ Delete</button>
+                    </div>
                 </div>
             </div>
             <div class="ps-thread" id="ps-thread-scroll">
@@ -917,7 +954,6 @@ CRITICAL RULES:
                 <div class="ps-typing">
                     <span></span><span></span><span></span>
                 </div>` : ''}
-                ${receipt}
             </div>
             <div class="ps-compose">
                 <button data-act="attach-image" type="button" class="ps-compose-camera" title="Send Photo">📷</button>
@@ -1095,7 +1131,7 @@ function viewDial() {
             {
                 key: 'ttsEnabled',
                 label: '🔊 TTS notifications',
-                desc: 'Read incoming SMS and calls aloud using ST\'s built-in TTS system.',
+                desc: 'Read incoming SMS and calls aloud using the TTS provider configured below.',
             },
             {
                 key: 'toastrEnabled',
@@ -1136,8 +1172,19 @@ function viewDial() {
                 <button data-act="save-settings" style="margin-top:12px; background:#a855f7; color:white; border:none; padding:10px 16px; border-radius:12px">Save Settings</button>
                 <div id="ps-settings-status" style="margin-top:8px; font-size:12px; color:#4ade80"></div>
                 <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
-                <h3 style="margin:0 0 12px; color:#581c87">Notifications</h3>
-                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">TTS uses ST's built-in TTS engine — enable it in Extension → Text-to-Speech and assign voices to characters. Toastr popups work instantly.</p>
+                <h3 style="margin:0 0 8px; color:#581c87">🔈 TTS Provider</h3>
+                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">Direct API call — no dependency on ST's TTS extension. Voice ID goes in each contact's profile.</p>
+                <label style="display:block; margin:8px 0 4px; font-size:12px">Provider</label>
+                <select id="ps-tts-provider" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe">
+                    <option value="elevenlabs"${state.settings.ttsProvider === 'elevenlabs' ? ' selected' : ''}>ElevenLabs</option>
+                    <option value=""${!state.settings.ttsProvider ? ' selected' : ''}>None (disabled)</option>
+                </select>
+                <label style="display:block; margin:8px 0 4px; font-size:12px">API Key</label>
+                <input type="password" id="ps-tts-apikey" value="${escape(state.settings.ttsApiKey || '')}" style="width:100%; padding:8px; border-radius:8px; border:1px solid #d8b4fe" placeholder="sk_...">
+                <button data-act="fetch-tts-voices" style="margin-top:8px; background:#007aff; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:12px; cursor:pointer">🔈 Fetch Voices</button>
+                <span id="ps-tts-voice-count" style="margin-left:8px; font-size:12px; color:#8e8e93">${state.ttsVoices.length ? state.ttsVoices.length + ' voices cached' : ''}</span>
+                <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
+                <h3 style="margin:0 0 8px; color:#581c87">Notifications</h3>
                 ${toggles}
                 <div class="ps-setting-actions" style="margin-top:12px">
                     <button data-act="harvest-now">Harvest NPCs now</button>
@@ -1205,11 +1252,32 @@ function viewDial() {
             <div class="ps-thread-head">
                 <button data-act="nav" data-view="contacts">←</button>
                 <b>${escape(c.name)}</b>
-                <button data-act="toggle-star" data-id="${escape(c.id)}" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px">${c.starred ? '★' : '☆'}</button>
+                <div style="position:relative">
+                    <button data-act="toggle-menu" data-id="${escape(c.id)}" data-context="profile" style="background:none;border:none;font-size:22px;cursor:pointer;padding:4px 8px;color:#8e8e93;line-height:1">⋮</button>
+                    <div class="ps-menu-dropdown" id="ps-menu-${c.id}" style="display:none;position:absolute;right:0;top:100%;background:#2c2c2e;border-radius:10px;padding:4px 0;min-width:160px;z-index:100;box-shadow:0 4px 16px rgba(0,0,0,0.4)">
+                        <button data-act="toggle-mute" data-id="${escape(c.id)}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${state.mutedContacts[c.id] ? '🔔' : '🔕'} ${state.mutedContacts[c.id] ? 'Unmute' : 'Mute'}</button>
+                        <button data-act="toggle-star" data-id="${escape(c.id)}" style="display:block;width:100%;padding:10px 16px;background:none;border:none;color:#f2f2f7;font-size:14px;text-align:left;cursor:pointer">${c.starred ? '★' : '☆'} ${c.starred ? 'Unstar' : 'Star'}</button>
+                    </div>
+                </div>
             </div>
             <div style="padding:12px;color:#1c1c1e;flex:1;overflow-y:auto">
                 <p style="margin:0 0 4px;font-size:12px;color:#8e8e93">${escape(c.number)}</p>
                 <p style="margin:0 0 12px;font-size:11px;color:#8e8e93">Source: ${escape(c.source)}</p>
+                <div style="margin:0 0 8px">
+                    <label style="font-size:11px;color:#8e8e93">TTS Voice<br></label>
+                    ${state.ttsVoices.length ? `
+                    <select id="ps-tts-voice" data-act="set-tts-voice" data-id="${escape(c.id)}"
+                        style="width:100%;padding:8px;border:1px solid #d1d1d6;border-radius:8px;font-size:13px;color:#1c1c1e;background:#fff;box-sizing:border-box">
+                        <option value="">— Default voice —</option>
+                        ${state.ttsVoices.map(v => `<option value="${escape(v.voice_id)}"${c.ttsVoice === v.voice_id ? ' selected' : ''}>${escape(v.name)}</option>`).join('')}
+                    </select>
+                    ` : `
+                    <input id="ps-tts-voice" type="text" placeholder="ElevenLabs voice ID (fetch voices in Settings first)"
+                        value="${escape(c.ttsVoice || '')}"
+                        style="width:100%;padding:8px;border:1px solid #d1d1d6;border-radius:8px;font-size:13px;color:#1c1c1e;background:#fff;box-sizing:border-box"
+                        data-act="set-tts-voice" data-id="${escape(c.id)}">
+                    `}
+                </div>
                 <hr style="border:none;border-top:1px solid #e5e5ea;margin:8px 0">
                 <h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Memories</h4>
                 ${mems.length ? mems.map(m => `

@@ -76,6 +76,20 @@
                 render();
                 return;
 
+            case 'toggle-menu': {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const menuId = el.getAttribute('data-id');
+                const dropdown = document.getElementById('ps-menu-' + menuId);
+                if (!dropdown) return;
+                // Close all other open menus first
+                document.querySelectorAll('.ps-menu-dropdown').forEach(d => {
+                    if (d !== dropdown) d.style.display = 'none';
+                });
+                const isOpen = dropdown.style.display === 'block';
+                dropdown.style.display = isOpen ? 'none' : 'block';
+                return;
+            }
             case 'toggle-star': {
                 const starId = el.getAttribute('data-id');
                 const contact = state.contacts.find(c => c.id === starId);
@@ -84,6 +98,33 @@
                     saveMeta();
                     render();
                 }
+                return;
+            }
+            case 'set-tts-voice': {
+                const voiceId = el.getAttribute('data-id');
+                const voiceContact = state.contacts.find(c => c.id === voiceId);
+                if (!voiceContact) return;
+                const newVoice = (el.value || '').trim();
+                voiceContact.ttsVoice = newVoice || undefined;
+                saveMeta();
+                console.log('[PhoneSocial] 🎤 TTS voice for ' + voiceContact.name + ': ' + (newVoice || '(default)'));
+                return;
+            }
+            case 'toggle-mute': {
+                const muteId = el.getAttribute('data-id');
+                if (state.mutedContacts[muteId]) {
+                    delete state.mutedContacts[muteId];
+                } else {
+                    state.mutedContacts[muteId] = true;
+                }
+                saveMeta();
+                render();
+                return;
+            }
+            case 'schedule-day': {
+                state.scheduleSelectedDay = el.getAttribute('data-day');
+                saveMeta();
+                render();
                 return;
             }
             
@@ -565,17 +606,21 @@
                 const model = document.getElementById('ps-set-model')?.value.trim();
                 const prompt = document.getElementById('ps-set-prompt')?.value.trim();
                 window.PhoneSocialSettings = { apiUrl: url, apiKey: key, model, systemPromptTemplate: prompt };
-                // Persist #1: via SillyTavern context extension settings (most reliable)
+                // Save TTS fields to state.settings
+                const ttsProv = document.getElementById('ps-tts-provider')?.value || '';
+                const ttsKey = document.getElementById('ps-tts-apikey')?.value.trim();
+                state.settings.ttsProvider = ttsProv;
+                state.settings.ttsApiKey = ttsKey;
+                saveMeta();
+                // Persist PhoneSocialSettings
                 const ctx = getCtx();
                 if (ctx?.extensionSettings) {
                     ctx.extensionSettings[EXT_NAME] = window.PhoneSocialSettings;
                     try { ctx.saveSettingsDebounced?.(); } catch (_) { /* ignore */ }
                 }
-                // Persist #2: extension_settings fallback (same object, but also ensure save settings)
                 if (window.extension_settings) {
                     window.extension_settings.PhoneSocial = window.PhoneSocialSettings;
                 }
-                // Persist #3: chat metadata fallback (also saves view state)
                 const meta = getChatMeta();
                 if (meta) {
                     meta.apiSettings = window.PhoneSocialSettings;
@@ -583,6 +628,34 @@
                 }
                 const status = document.getElementById('ps-settings-status');
                 if (status) status.textContent = '✅ Saved!';
+                return;
+            }
+            case 'fetch-tts-voices': {
+                const apiKey = state.settings.ttsApiKey || document.getElementById('ps-tts-apikey')?.value.trim();
+                if (!apiKey) {
+                    if (typeof toastr !== 'undefined') toastr.warning('Enter an API key first.', 'TTS');
+                    return;
+                }
+                const countEl = document.getElementById('ps-tts-voice-count');
+                if (countEl) countEl.textContent = 'Fetching…';
+                fetch('https://api.elevenlabs.io/v1/voices', {
+                    headers: { 'xi-api-key': apiKey },
+                }).then(r => r.json()).then(data => {
+                    if (data.voices && Array.isArray(data.voices)) {
+                        state.ttsVoices = data.voices.map(v => ({ voice_id: v.voice_id, name: v.name }));
+                        state.ttsVoicesFetched = Date.now();
+                        saveMeta();
+                        if (countEl) countEl.textContent = state.ttsVoices.length + ' voices cached';
+                        if (typeof toastr !== 'undefined') toastr.success('Fetched ' + state.ttsVoices.length + ' voices', 'TTS');
+                        render();
+                    } else {
+                        throw new Error('Unexpected response');
+                    }
+                }).catch(e => {
+                    console.warn('[PhoneSocial] fetch voices failed:', e);
+                    if (countEl) countEl.textContent = 'Error';
+                    if (typeof toastr !== 'undefined') toastr.error('Failed to fetch voices. Check API key.', 'TTS');
+                });
                 return;
             }
             // ─── Browser actions ────────────────────────────────────

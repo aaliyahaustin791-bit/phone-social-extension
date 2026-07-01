@@ -16,6 +16,8 @@
         openOnChat: false,
         ttsEnabled: false,       // Use ST's TTS for incoming SMS/calls
         toastrEnabled: true,     // Show toastr notifications for incoming SMS/calls
+        ttsProvider: 'elevenlabs',  // TTS provider: 'elevenlabs' or ''
+        ttsApiKey: '',              // API key for TTS provider
     };
     const VIEW_HISTORY_LIMIT = 25;
     const VALID_VIEWS = new Set(['home', 'contacts', 'sms', 'thread', 'dial', 'settings', 'albums', 'profile', 'memories', 'call', 'browser', 'chirp', 'chirp-thread', 'favorites']);
@@ -57,6 +59,10 @@
             incomingBanner: null, // {contactId, name, text, ts} — transient SMS popup
             lastUserMessageAt: 0,  // timestamp of last user message (for inactivity tracking)
             userDnd: false,        // do-not-disturb: suppress all autonomous messages
+            mutedContacts: {},     // {contactId: true} — per-contact mute
+            scheduleSelectedDay: null, // selected day for schedule pill display
+            ttsVoices: [],             // cached TTS voice list [{voice_id, name}]
+            ttsVoicesFetched: 0,       // timestamp of last voice fetch
         };
     }
 

@@ -15,25 +15,68 @@
             console.log('[PhoneSocial] TTS skipped: PhoneSocial toggle OFF');
             return;
         }
-        if (!isTtsAvailable()) {
-            console.log('[PhoneSocial] TTS skipped: ST TTS not enabled');
+        if (!state.settings.ttsProvider || !state.settings.ttsApiKey) {
+            console.log('[PhoneSocial] TTS skipped: no TTS provider or API key configured');
             return;
         }
         if (!text) return;
-        const ctx = getCtx();
-        if (!ctx?.executeSlashCommands) {
-            console.warn('[PhoneSocial] TTS skipped: no executeSlashCommands');
-            return;
+
+        // Look up voice ID from contact
+        let voiceId = null;
+        if (contactName) {
+            const contact = state.contacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
+            voiceId = contact?.ttsVoice || null;
         }
-        console.log('[PhoneSocial] TTS speaking:', text.slice(0, 60));
-        // Use plain /speak with no voice override — avoids "no voice assigned to X" errors.
-        // ST will use whatever TTS voice is configured as default in its settings.
+
+        console.log('[PhoneSocial] TTS speaking:', text.slice(0, 60), 'voice:', voiceId || '(default)');
+
         try {
-            const cleanText = String(text).replace(/"/g, '\\"').slice(0, 300);
-            await ctx.executeSlashCommands(`/speak "${cleanText}"`);
+            if (state.settings.ttsProvider === 'elevenlabs') {
+                await elevenlabsTts(text, voiceId, state.settings.ttsApiKey);
+            }
         } catch (e) {
             console.warn('[PhoneSocial] TTS failed:', e);
         }
+    }
+
+    async function elevenlabsTts(text, voiceId, apiKey) {
+        const vid = voiceId || '21m00Tcm4TlvDq8ikWAM'; // Rachel default
+        const resp = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + vid, {
+            method: 'POST',
+            headers: {
+                'xi-api-key': apiKey,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                text: String(text).slice(0, 5000),
+                model_id: 'eleven_flash_v2_5',
+                voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+            }),
+        });
+        if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error('ElevenLabs API ' + resp.status + ': ' + errText.slice(0, 200));
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.setAttribute('playsinline', '');
+        // Attach to DOM so mobile browsers don't block it
+        audio.style.display = 'none';
+        document.body.appendChild(audio);
+        try {
+            await audio.play();
+        } catch (playErr) {
+            console.warn('[PhoneSocial] TTS play blocked (autoplay):', playErr.message);
+        }
+        audio.onended = () => {
+            URL.revokeObjectURL(url);
+            audio.remove();
+        };
+        audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            audio.remove();
+        };
     }
 
     // ─── Toastr notifications ───────────────────────────────────────
@@ -540,6 +583,11 @@
             console.log('[PhoneSocial] 📞 simulateIncomingCall BLOCKED: already on call with ' + (state.activeCall.contactId || '?'));
             return; // Already on a call
         }
+        // Mute check
+        if (state.mutedContacts[contact.id]) {
+            console.log('[PhoneSocial] 🔕 simulateIncomingCall BLOCKED: ' + contact.name + ' is muted');
+            return;
+        }
         // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.
         // The scheduler checks this, but chat state can change between
         // scheduling and execution. If they're in the room, abort.
@@ -593,6 +641,11 @@
         console.log('[PhoneSocial] 💬 simulateProactiveText ENTER: ' + contact.name + ' skipPresence=' + !!opts.skipPresenceCheck + ' autoReplies=' + state.settings.autoReplies);
         if (!state.settings.autoReplies) {
             console.log('[PhoneSocial] 💬 simulateProactiveText BLOCKED: autoReplies OFF');
+            return;
+        }
+        // Mute check
+        if (state.mutedContacts[contact.id]) {
+            console.log('[PhoneSocial] 🔕 simulateProactiveText BLOCKED: ' + contact.name + ' is muted');
             return;
         }
         // LAST-LINE DEFENSE: double-check NPC isn't present in the scene.

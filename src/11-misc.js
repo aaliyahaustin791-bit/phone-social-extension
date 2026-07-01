@@ -4,56 +4,86 @@
         if (!hasSchedule) {
             return '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
                 '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>' +
-                '<p style="font-size:12px;color:#8e8e93;margin:0 0 8px">No schedule generated yet. Generate a weekly schedule to control when this NPC can reach out.</p>' +
+                '<p style="font-size:12px;color:#8e8e93;margin:0 0 8px">No schedule generated yet.</p>' +
                 '<button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:#007aff;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer">⚡ Generate Schedule</button>';
         }
         const s = contact.schedule;
-        const stale = scheduleNeedsRefresh(s);
         const now = getCurrentScheduleStatus(s);
-        // ── In-scene override: speaker-only — green banner only for NPCs
-        // who actually have speaking lines. Narration mentions from ensemble
-        // cards are used for proactive blocking, not the green banner.
-        const inScene = isNpcPresent(contact.name, {narration: false});
-        const displayStatus = inScene ? 'online' : (now ? now.status : 'online');
-        const displayActivity = inScene ? 'with you right now' : (now ? now.activity : 'unknown');
-        const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
-        const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
-        const nowStatus = displayStatus;
-        const nowActivity = displayActivity;
-        let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
-            '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
-        if (inScene) {
-            html += '<div style="background:#e8f5e9;border-radius:8px;padding:6px 10px;margin-bottom:10px;font-size:11px;color:#2e7d32">' +
-                '📍 Present in chat — schedule overridden to ONLINE</div>';
-        }
-        if (stale) {
-            html += '<div style="background:#fff3cd;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#856404">' +
-                '⚠️ Schedule is from a previous week. <button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:none;color:#007aff;font-size:11px;cursor:pointer;padding:0;text-decoration:underline">Regenerate</button></div>';
-        }
-        html += '<div style="background:#f2f2f7;border-radius:10px;padding:10px;margin-bottom:8px">' +
-            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
-            '<span style="font-size:16px">' + (statusEmoji[nowStatus] || '') + '</span>' +
-            '<span style="font-size:13px;font-weight:600;color:#1c1c1e">' + nowStatus.toUpperCase() + '</span>' +
-            '<span style="font-size:12px;color:#8e8e93">— ' + escape(nowActivity) + '</span></div>' +
-            '<div style="font-size:11px;color:#8e8e93">Talkativeness: ' + (s.talkativeness || 50) + '/100 • Reaches out after ' + (s.inactivityThresholdMinutes || 120) + 'min</div></div>';
-        // 7-day compact grid
         const chatNow = getChatTime();
         const todayIdx = (chatNow.getDay() + 6) % 7;
-        html += '<div style="display:flex;flex-direction:column;gap:4px;font-size:10px;max-height:200px;overflow-y:auto">';
+        const statusColors = { online: '#34c759', idle: '#ff9f0a', dnd: '#ff3b30', offline: '#8e8e93' };
+        const statusEmoji = { online: '🟢', idle: '🟡', dnd: '🔴', offline: '⚫' };
+
+        // Selected day (default: today)
+        const selDay = state.scheduleSelectedDay || DAYS[todayIdx];
+        const selBlocks = Array.isArray(s.days[selDay]) ? s.days[selDay] : [];
+
+        // ── Status card ──
+        const nowStatus = now ? now.status : 'online';
+        const nowActivity = now ? now.activity : 'unknown';
+        const talkPct = Math.min(100, Math.max(0, s.talkativeness || 50));
+        let html = '<hr style="border:none;border-top:1px solid #e5e5ea;margin:12px 0">' +
+            '<h4 style="margin:0 0 8px;font-size:13px;color:#1c1c1e">Schedule</h4>';
+        html += '<div class="ps-schedule-status-card">' +
+            '<span class="ps-schedule-status-icon">' + (statusEmoji[nowStatus] || '') + '</span>' +
+            '<span class="ps-schedule-status-label">' + nowStatus.toUpperCase() + ' — ' + escape(nowActivity) + '</span>' +
+            '<div class="ps-schedule-talk-bar"><div class="ps-schedule-talk-fill" style="width:' + talkPct + '%"></div></div>' +
+            '</div>';
+
+        // ── Day selector pills ──
+        html += '<div class="ps-schedule-pills">';
         for (let i = 0; i < 7; i++) {
             const day = DAYS[i];
             const blocks = Array.isArray(s.days[day]) ? s.days[day] : [];
             const isToday = i === todayIdx;
-            const dotColors = blocks.slice(0, 8).map(b => '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (statusColors[b.status] || '#ccc') + ';margin-right:1px" title="' + escape(b.time + ' ' + b.activity) + '"></span>').join('');
-            const timePreview = blocks.slice(0, 3).map(b => '<span style="color:#8e8e93">' + escape(b.time) + '</span>').join(' ');
-            html += '<div style="display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:4px' + (isToday ? ';background:#e8f0fe' : '') + '">' +
-                '<span style="width:40px;font-weight:' + (isToday ? '600' : '400') + ';color:#1c1c1e">' + day.slice(0, 3) + '</span>' +
-                '<span style="flex:1">' + dotColors + '</span>' +
-                '<span style="font-size:9px">' + timePreview + '</span></div>';
+            const isSelected = day === selDay;
+            const dots = blocks.slice(0, 4).map(b =>
+                '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + (statusColors[b.status] || '#ccc') + ';margin:1px 0 0 1px"></span>'
+            ).join('');
+            html += '<button data-act="schedule-day" data-day="' + day + '" class="ps-schedule-pill' +
+                (isSelected ? ' ps-schedule-pill-sel' : '') + (isToday ? ' ps-schedule-pill-today' : '') + '">' +
+                '<span>' + day.slice(0, 3) + '</span>' +
+                '<span class="ps-schedule-pill-dots">' + dots + '</span></button>';
+        }
+        html += '</div>';
+
+        // ── Block timeline ──
+        html += '<div class="ps-schedule-blocks">';
+        if (selBlocks.length) {
+            // Calculate NOW position for today
+            let nowMarker = '';
+            if (selDay === DAYS[todayIdx] && selBlocks.length) {
+                const firstBlock = selBlocks[0];
+                const lastBlock = selBlocks[selBlocks.length - 1];
+                const firstMin = timeToMinutes(firstBlock.time.split('-')[0]);
+                const lastEndMin = timeToMinutes(lastBlock.time.split('-')[1]);
+                const nowMin = chatNow.getHours() * 60 + chatNow.getMinutes();
+                if (nowMin >= firstMin && nowMin <= lastEndMin) {
+                    const total = lastEndMin - firstMin || 1;
+                    const pct = ((nowMin - firstMin) / total) * 100;
+                    const timeLabel = chatNow.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                    nowMarker = '<div class="ps-schedule-now" style="top:' + pct.toFixed(1) + '%"><span>NOW ' + timeLabel + '</span></div>';
+                }
+            }
+            html += nowMarker;
+            for (const block of selBlocks) {
+                html += '<div class="ps-schedule-block">' +
+                    '<span class="ps-schedule-block-time">' + escape(block.time) + '</span>' +
+                    '<span class="ps-schedule-block-dot" style="background:' + (statusColors[block.status] || '#ccc') + '"></span>' +
+                    '<span class="ps-schedule-block-activity">' + escape(block.activity) + '</span>' +
+                    '<span class="ps-schedule-block-status">' + (block.status || '').toUpperCase() + '</span></div>';
+            }
+        } else {
+            html += '<p class="ps-empty" style="font-size:12px;color:#8e8e93;padding:12px">No blocks for ' + selDay + '.</p>';
         }
         html += '</div>';
         html += '<div style="margin-top:10px"><button data-act="generate-schedule" data-id="' + escape(contact.id) + '" style="background:none;border:1px solid #007aff;color:#007aff;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer">🔄 Regenerate Schedule</button></div>';
         return html;
+    }
+
+    function timeToMinutes(t) {
+        const parts = (t || '').split(':');
+        return (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
     }
 
     // -------------------------------------------------------------------

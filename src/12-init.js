@@ -44,6 +44,8 @@
                             for (const c of state.contacts) {
                                 if (c._autonomousMsgs) c._autonomousMsgs.count = 0;
                             }
+                            // ── Inline SMS reply from main chat ──
+                            handleInlineSMSReply(lastMsg.mes);
                         }
                     }
                     harvestNPCs();
