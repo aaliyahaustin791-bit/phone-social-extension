@@ -16,6 +16,58 @@ function cleanThreads(threads) {
         return out;
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // World comms profile resolution (Diegetic Device Mode — Phase 1)
+    // ───────────────────────────────────────────────────────────────────
+    /** Resolve the active comms profile: per-chat override wins, else global setting, else modern. */
+    function getWorldCommsProfile() {
+        try {
+            // Per-chat override
+            if (state && state.worldCommsProfile && typeof state.worldCommsProfile === 'string') {
+                const p = WORLD_COMMS_PROFILES[state.worldCommsProfile];
+                if (p) return p;
+            }
+            // Global setting
+            const key = (state && state.settings && state.settings.commsProfile) || 'modern';
+            return WORLD_COMMS_PROFILES[key] || WORLD_COMMS_PROFILES.modern;
+        } catch (_) {
+            return WORLD_COMMS_PROFILES.modern;
+        }
+    }
+
+    /** Return the resolved profile KEY (e.g. 'fantasy') for the current chat. */
+    function getWorldCommsProfileKey() {
+        if (state && state.worldCommsProfile && WORLD_COMMS_PROFILES[state.worldCommsProfile]) {
+            return state.worldCommsProfile === 'auto' ? 'modern' : state.worldCommsProfile;
+        }
+        const key = (state && state.settings && state.settings.commsProfile) || 'modern';
+        return key === 'auto' ? 'modern' : (WORLD_COMMS_PROFILES[key] ? key : 'modern');
+    }
+
+    /** Get a single label field from the resolved profile, safe-guarded. */
+    function getCommsLabel(field) {
+        const p = getWorldCommsProfile();
+        return (p && p[field]) || '';
+    }
+
+    /**
+     * Get the app icon glyph for a view under the active profile.
+     * Fantasy returns an inline SVG string; modern/scifi return emoji.
+     * Falls back to the modern emoji if a profile omits a key, then to ''.
+     */
+    function getAppIcon(view) {
+        const p = getWorldCommsProfile();
+        const icon = p && p.icons && p.icons[view];
+        if (icon) return icon;
+        const m = WORLD_COMMS_PROFILES.modern.icons;
+        return (m && m[view]) || '';
+    }
+
+    /** Replace {name} in a notification template with the contact name. */
+    function formatCommsText(template, name) {
+        return String(template || '').replace(/\{name\}/g, name || 'Someone');
+    }
+
     function saveMeta() {
         const ctx = getCtx();
         const meta = getChatMeta();
@@ -40,6 +92,7 @@ function cleanThreads(threads) {
             meta.callLog = state.callLog;
             meta.voicemails = voicemailSave;
             meta.settings = state.settings;
+            meta.worldCommsProfile = state.worldCommsProfile || null;
             meta.view = state.view;
             meta.viewHistory = viewHistClean;
             meta.activeContact = state.activeContact;
@@ -70,6 +123,7 @@ function cleanThreads(threads) {
             callLog: state.callLog,
             voicemails: voicemailSave,
             settings: state.settings,
+            worldCommsProfile: state.worldCommsProfile || null,
             view: state.view,
             viewHistory: viewHistClean,
             activeContact: state.activeContact,
@@ -146,6 +200,9 @@ function cleanThreads(threads) {
                     if (backup.settings && typeof backup.settings === 'object') {
                         state.settings = { ...DEFAULT_SETTINGS, ...backup.settings };
                     }
+                    if (typeof backup.worldCommsProfile === 'string' || backup.worldCommsProfile === null) {
+                        state.worldCommsProfile = backup.worldCommsProfile;
+                    }
                     if (backup.view && VALID_VIEWS.has(backup.view)) state.view = backup.view;
                     if (Array.isArray(backup.viewHistory)) {
                         state.viewHistory = backup.viewHistory.filter(v => VALID_VIEWS.has(v)).slice(-VIEW_HISTORY_LIMIT);
@@ -187,6 +244,9 @@ function cleanThreads(threads) {
             state.voicemails = Array.isArray(meta.voicemails) ? meta.voicemails : [];
             state.dialTab = meta.dialTab || 'keypad';
             state.settings = { ...DEFAULT_SETTINGS, ...(meta.settings && typeof meta.settings === 'object' ? meta.settings : {}) };
+            if (typeof meta.worldCommsProfile === 'string' || meta.worldCommsProfile === null) {
+                state.worldCommsProfile = meta.worldCommsProfile;
+            }
             const savedView = meta.view;
             if (savedView && VALID_VIEWS.has(savedView)) state.view = savedView;
             if (Array.isArray(meta.viewHistory)) {

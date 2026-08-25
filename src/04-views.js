@@ -24,11 +24,18 @@
         if (currentInput && currentInput.value) {
             composeDraft = currentInput.value;
         }
+        // Apply resolved comms-profile theme class to the panel root so
+        // .ps-theme-* CSS variables take effect (chrome recolor). Default modern.
+        try {
+            const themeClass = (typeof getCommsLabel === 'function' && getCommsLabel('themeClass')) || 'ps-theme-modern';
+            panel.classList.remove('ps-theme-modern', 'ps-theme-fantasy', 'ps-theme-scifi');
+            panel.classList.add(themeClass);
+        } catch (_) { /* ignore — falls back to default variables */ }
         panel.innerHTML = `
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v8</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">${((typeof getCommsLabel === 'function' && getCommsLabel('statusbarCarrier')) || '📱 PhoneSocial')} · v9</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -69,6 +76,20 @@
             </div>
         `;
         bindPanel(panel);
+
+        // Wire up World Comms Profile dropdown — auto-save + instant apply (Phase 1)
+        const commsSelect = panel.querySelector('#ps-comms-profile');
+        if (commsSelect && !commsSelect._wired) {
+            commsSelect._wired = true;
+            commsSelect.addEventListener('change', () => {
+                const val = commsSelect.value || 'modern';
+                state.worldCommsProfile = val;              // per-chat override
+                if (state.settings) state.settings.commsProfile = val; // also update global default
+                saveMeta();
+                console.log('[PhoneSocial] 🌍 comms profile → ' + val);
+                render();                                   // instant re-render applies theme + labels
+            });
+        }
 
         // Wire up contact search filter (real-time)
         const searchInput = panel.querySelector('#ps-contact-search');
@@ -593,40 +614,40 @@ CRITICAL RULES:
                     <div class="ps-date-large" style="color:${subColor}">${dateStr}</div>
                     <div class="ps-app-grid">
                         <div class="ps-app" style="background:linear-gradient(135deg,#86efac,#4ade80)" data-act="nav" data-view="dial">
-                            <span class="ps-app-icon">📞</span>
-                            <span class="ps-app-label" style="color:${textColor}">Phone</span>
+                            <span class="ps-app-icon">${getAppIcon('dial')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('callsLabel') || 'Phone'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fda4af,#fb7185)" data-act="nav" data-view="sms">
-                            <span class="ps-app-icon">💬</span>
-                            <span class="ps-app-label" style="color:${textColor}">Messages</span>
+                            <span class="ps-app-icon">${getAppIcon('sms')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('messagesLabel') || 'Messages'}</span>
                             ${unreadSms > 0 ? `<span class="ps-badge">${unreadSms > 99 ? '99+' : unreadSms}</span>` : ''}
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#93c5fd,#60a5fa)" data-act="nav" data-view="contacts">
-                            <span class="ps-app-icon">👥</span>
-                            <span class="ps-app-label" style="color:${textColor}">Contacts</span>
+                            <span class="ps-app-icon">${getAppIcon('contacts')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('contactsLabel') || 'Contacts'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fcd34d,#fbbf24)" data-act="nav" data-view="albums">
-                            <span class="ps-app-icon">🎨</span>
+                            <span class="ps-app-icon">${getAppIcon('albums')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Wallpapers</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)" data-act="nav" data-view="settings">
-                            <span class="ps-app-icon">⚙️</span>
+                            <span class="ps-app-icon">${getAppIcon('settings')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Settings</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#bae6fd,#7dd3fc)" data-act="nav" data-view="browser">
-                            <span class="ps-app-icon">🌐</span>
-                            <span class="ps-app-label" style="color:${textColor}">Browser</span>
+                            <span class="ps-app-icon">${getAppIcon('browser')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('browserLabel') || 'Browser'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9)" data-act="nav" data-view="chirp">
-                            <span class="ps-app-icon">🐦</span>
-                            <span class="ps-app-label" style="color:${textColor}">Chirp</span>
+                            <span class="ps-app-icon">${getAppIcon('chirp')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('feedLabel') || 'Chirp'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fecaca,#f87171)" data-act="nav" data-view="favorites">
-                            <span class="ps-app-icon">❤️</span>
+                            <span class="ps-app-icon">${getAppIcon('favorites')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Favorites</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#818cf8,#6366f1)" data-act="nav" data-view="memories">
-                            <span class="ps-app-icon">🧠</span>
+                            <span class="ps-app-icon">${getAppIcon('memories')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Memories</span>
                         </div>
                     </div>
@@ -636,17 +657,17 @@ CRITICAL RULES:
                     </div>
                     <div class="ps-dock">
                         <div class="ps-dock-app" data-act="nav" data-view="dial">
-                            <span class="ps-dock-app-icon">📞</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Phone</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('dial')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('callsLabel') || 'Phone'}</span>
                         </div>
                         <div class="ps-dock-app" data-act="nav" data-view="sms">
-                            <span class="ps-dock-app-icon">💬</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Messages</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('sms')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('messagesLabel') || 'Messages'}</span>
                             ${unreadSms > 0 ? `<span class="ps-badge">${unreadSms > 99 ? '99+' : unreadSms}</span>` : ''}
                         </div>
                         <div class="ps-dock-app" data-act="nav" data-view="browser">
-                            <span class="ps-dock-app-icon">🌐</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Browser</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('browser')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('browserLabel') || 'Browser'}</span>
                         </div>
                     </div>
                     <p class="ps-hint">Swipe right to go back</p>
@@ -1157,8 +1178,17 @@ function viewDial() {
                 </div>
             `;
         }).join('');
+        // ── World Comms Profile (Diegetic Device Mode — Phase 1) ──
+        const activeProfileKey = (typeof getWorldCommsProfileKey === 'function') ? getWorldCommsProfileKey() : 'modern';
+        const commsOptions = (typeof COMMS_PROFILE_OPTIONS !== 'undefined' ? COMMS_PROFILE_OPTIONS : [])
+            .map(o => `<option value="${o.value}"${o.value === activeProfileKey ? ' selected' : ''}>${o.label}</option>`)
+            .join('');
         return `
             <div class="ps-settings" style="padding:12px">
+                <h3 style="margin:0 0 8px; color:#581c87">🌍 Communication Era</h3>
+                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">Reskin the phone to fit your world. Changes apply instantly to this chat.</p>
+                <select id="ps-comms-profile" style="width:100%; padding:10px; border-radius:8px; border:1px solid #d8b4fe; font-size:13px">${commsOptions}</select>
+                <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
                 <h3 style="margin:0 0 12px; color:#581c87">SMS API (separate from main chat)</h3>
                 <p style="margin:0 0 12px; font-size:11px; color:#8e8e93">Leave API Key empty to use ST's built-in model instead.</p>
                 <label style="display:block; margin:8px 0 4px; font-size:12px">API URL</label>

@@ -18,7 +18,98 @@
         toastrEnabled: true,     // Show toastr notifications for incoming SMS/calls
         ttsProvider: 'elevenlabs',  // TTS provider: 'elevenlabs' or ''
         ttsApiKey: '',              // API key for TTS provider
+        commsProfile: 'modern',     // World comms profile / diegetic device theme (per-chat via worldCommsProfile)
     };
+
+    // ───────────────────────────────────────────────────────────────────
+    // WORLD COMMS PROFILES — Diegetic Device Mode (Phase 1: chrome + labels)
+    // Each profile ONLY provides labels + a themeClass. The themeClass maps to
+    // a CSS-variable-only block in injectPastelTheme() — themes redefine colors,
+    // never layout. This makes themes regression-proof: switching a theme cannot
+    // break base UI because base rules read from var(--ps-*) and themes only
+    // reassign those variables.
+    // ───────────────────────────────────────────────────────────────────
+    const WORLD_COMMS_PROFILES = {
+        modern: {
+            era: 'modern',
+            deviceName: 'PhoneSocial',
+            messagesLabel: 'Messages',
+            callsLabel: 'Phone',
+            contactsLabel: 'Contacts',
+            browserLabel: 'Browser',
+            feedLabel: 'Chirp',
+            feedSystemName: 'Chirp',
+            searchEngineName: 'the web',
+            themeClass: 'ps-theme-modern',
+            tone: 'modern, casual, texting slang and emoji',
+            statusbarCarrier: '📱 PhoneSocial',
+            incomingMessageText: '{name} sent you a message.',
+            incomingCallText: '{name} is calling…',
+            icons: {
+                dial: '📞', sms: '💬', contacts: '👥', albums: '🎨',
+                settings: '⚙️', browser: '🌐', chirp: '🐦',
+                favorites: '❤️', memories: '🧠',
+            },
+        },
+        fantasy: {
+            era: 'fantasy',
+            deviceName: 'MirrorNet',
+            messagesLabel: 'Whispers',
+            callsLabel: 'Scrying',
+            contactsLabel: 'Acquaintances',
+            browserLabel: 'Great Archive',
+            feedLabel: 'Town Crier',
+            feedSystemName: 'Town Crier',
+            searchEngineName: 'the Great Archive',
+            themeClass: 'ps-theme-fantasy',
+            tone: 'medieval high-fantasy, formal and archaic, no modern slang',
+            statusbarCarrier: '🔮 MirrorNet',
+            incomingMessageText: 'The mirror flickers — {name} is reaching out.',
+            incomingCallText: 'A scrying call arrives from {name}.',
+            icons: {
+                // Illuminated-manuscript emblems — filled gold heraldic glyphs.
+                // 24x24 viewBox, fill=currentColor so they inherit the gold theme.
+                dial: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a1 1 0 0 1 .9.56l1.9 3.9 4.3.6a1 1 0 0 1 .56 1.7l-3.1 3 .74 4.28a1 1 0 0 1-1.45 1.05L12 15.9V2z" opacity=".55"/><path d="M12 2v13.9l-3.9 2.05a1 1 0 0 1-1.45-1.05l.74-4.28-3.1-3a1 1 0 0 1 .56-1.7l4.3-.6 1.9-3.9A1 1 0 0 1 12 2z"/></svg>', // scrying — a heraldic star/compass
+                sms: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-5l-4 4v-4H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M6 8h12M6 11h8" stroke="#1a0f28" stroke-width="1.4" stroke-linecap="round" fill="none"/></svg>', // whispers — a sealed scroll-speech
+                contacts: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0z"/><circle cx="12" cy="8" r="1.6" fill="#1a0f28"/></svg>', // acquaintances — a portrait medallion
+                albums: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16v14H4z" opacity=".5"/><path d="M4 5h16v14H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 15l3-4 3 3 2-2 2 3z" fill="#1a0f28"/><circle cx="8.5" cy="8.5" r="1.5" fill="#1a0f28"/></svg>', // tapestries — a framed illumination
+                settings: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2 3 3.5-.8-.8 3.5L20 12l-3.3 1.3.8 3.5-3.5-.8L12 22l-2-3-3.5.8.8-3.5L4 12l3.3-1.3L6.5 4.2 10 5z"/><circle cx="12" cy="12" r="3" fill="#1a0f28"/></svg>', // enchantments — an alchemical seal
+                browser: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="#1a0f28" stroke-width="1.2"/></svg>', // great archive — an armillary orb
+                chirp: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 14c4 3 10 3 15-3-1 4-4 7-8 7-3 0-5-1.5-6-4z"/><path d="M9 4c3-1 6 1 7 4l4 1-3 2 .5 3-3-2c-3 1-6-1-6-4z"/><circle cx="15" cy="8" r=".9" fill="#1a0f28"/></svg>', // town crier — a raven/messenger
+                favorites: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21C5 15 3 11 3 8a5 5 0 0 1 9-3 5 5 0 0 1 9 3c0 3-2 7-9 13z"/></svg>', // cherished — a heraldic heart
+                memories: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h9l3 3v15l-6-3-6 3z"/><path d="M9 8h6M9 11h4" stroke="#1a0f28" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg>', // remembrances — a bound tome
+            },
+        },
+        scifi: {
+            era: 'scifi',
+            deviceName: 'CommLink',
+            messagesLabel: 'Transmissions',
+            callsLabel: 'Holo-Call',
+            contactsLabel: 'Crew Roster',
+            browserLabel: 'Galactic Index',
+            feedLabel: 'Relay Feed',
+            feedSystemName: 'Relay Feed',
+            searchEngineName: 'the Galactic Index',
+            themeClass: 'ps-theme-scifi',
+            tone: 'futuristic sci-fi, clipped and technical, references to systems/relays/ships',
+            statusbarCarrier: '🛰️ CommLink',
+            incomingMessageText: 'Incoming transmission from {name}.',
+            incomingCallText: '{name} is opening a holo-channel…',
+            icons: {
+                dial: '📡', sms: '📨', contacts: '🧑‍🚀', albums: '🖼️',
+                settings: '🛠️', browser: '🌌', chirp: '📶',
+                favorites: '⭐', memories: '💾',
+            },
+        },
+    };
+    // 'auto' aliases to modern
+    WORLD_COMMS_PROFILES.auto = WORLD_COMMS_PROFILES.modern;
+
+    const COMMS_PROFILE_OPTIONS = [
+        { value: 'modern', label: '📱 Modern (Smartphone)' },
+        { value: 'fantasy', label: '🔮 Fantasy (MirrorNet)' },
+        { value: 'scifi', label: '🛰️ Sci-Fi (CommLink)' },
+    ];
     const VIEW_HISTORY_LIMIT = 25;
     const VALID_VIEWS = new Set(['home', 'contacts', 'sms', 'thread', 'dial', 'settings', 'albums', 'profile', 'memories', 'call', 'browser', 'chirp', 'chirp-thread', 'favorites']);
     const VIEW_PARENT = {
@@ -51,6 +142,7 @@
             view: 'home',      // 'home' | 'contacts' | 'sms' | 'thread' | 'dial' | 'settings' | 'call' | 'browser' | 'chirp'
             viewHistory: [],
             settings: { ...DEFAULT_SETTINGS },
+            worldCommsProfile: null, // per-chat comms profile key override (null → use global settings.commsProfile)
             chirpPosts: [],    // [{id, author: {name, handle, isContact}, text, ts, likes, likedBy:[handle], comments: [{author: {name, handle}, text, ts}]}]
             chirpLastRefresh: 0,
             typingContactId: null,  // contact ID currently "typing" (shows animated dots)
@@ -90,6 +182,9 @@
     function getChatKey() {
         const ctx = getCtx();
         if (!ctx) return 'default';
+        // Use the ST chat ID for per-session isolation — a new chat = new PhoneSocial data
+        if (ctx.chatId) return 'chat_' + String(ctx.chatId).replace(/[^a-z0-9_-]/g, '_');
+        // Fallback for edge cases where chatId isn't available
         const charName = (ctx.name2 || ctx.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
         const group = ctx.groupId || 'dm';
         return charName + '_' + group;
@@ -159,6 +254,58 @@ function cleanThreads(threads) {
         return out;
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // World comms profile resolution (Diegetic Device Mode — Phase 1)
+    // ───────────────────────────────────────────────────────────────────
+    /** Resolve the active comms profile: per-chat override wins, else global setting, else modern. */
+    function getWorldCommsProfile() {
+        try {
+            // Per-chat override
+            if (state && state.worldCommsProfile && typeof state.worldCommsProfile === 'string') {
+                const p = WORLD_COMMS_PROFILES[state.worldCommsProfile];
+                if (p) return p;
+            }
+            // Global setting
+            const key = (state && state.settings && state.settings.commsProfile) || 'modern';
+            return WORLD_COMMS_PROFILES[key] || WORLD_COMMS_PROFILES.modern;
+        } catch (_) {
+            return WORLD_COMMS_PROFILES.modern;
+        }
+    }
+
+    /** Return the resolved profile KEY (e.g. 'fantasy') for the current chat. */
+    function getWorldCommsProfileKey() {
+        if (state && state.worldCommsProfile && WORLD_COMMS_PROFILES[state.worldCommsProfile]) {
+            return state.worldCommsProfile === 'auto' ? 'modern' : state.worldCommsProfile;
+        }
+        const key = (state && state.settings && state.settings.commsProfile) || 'modern';
+        return key === 'auto' ? 'modern' : (WORLD_COMMS_PROFILES[key] ? key : 'modern');
+    }
+
+    /** Get a single label field from the resolved profile, safe-guarded. */
+    function getCommsLabel(field) {
+        const p = getWorldCommsProfile();
+        return (p && p[field]) || '';
+    }
+
+    /**
+     * Get the app icon glyph for a view under the active profile.
+     * Fantasy returns an inline SVG string; modern/scifi return emoji.
+     * Falls back to the modern emoji if a profile omits a key, then to ''.
+     */
+    function getAppIcon(view) {
+        const p = getWorldCommsProfile();
+        const icon = p && p.icons && p.icons[view];
+        if (icon) return icon;
+        const m = WORLD_COMMS_PROFILES.modern.icons;
+        return (m && m[view]) || '';
+    }
+
+    /** Replace {name} in a notification template with the contact name. */
+    function formatCommsText(template, name) {
+        return String(template || '').replace(/\{name\}/g, name || 'Someone');
+    }
+
     function saveMeta() {
         const ctx = getCtx();
         const meta = getChatMeta();
@@ -183,6 +330,7 @@ function cleanThreads(threads) {
             meta.callLog = state.callLog;
             meta.voicemails = voicemailSave;
             meta.settings = state.settings;
+            meta.worldCommsProfile = state.worldCommsProfile || null;
             meta.view = state.view;
             meta.viewHistory = viewHistClean;
             meta.activeContact = state.activeContact;
@@ -213,6 +361,7 @@ function cleanThreads(threads) {
             callLog: state.callLog,
             voicemails: voicemailSave,
             settings: state.settings,
+            worldCommsProfile: state.worldCommsProfile || null,
             view: state.view,
             viewHistory: viewHistClean,
             activeContact: state.activeContact,
@@ -289,6 +438,9 @@ function cleanThreads(threads) {
                     if (backup.settings && typeof backup.settings === 'object') {
                         state.settings = { ...DEFAULT_SETTINGS, ...backup.settings };
                     }
+                    if (typeof backup.worldCommsProfile === 'string' || backup.worldCommsProfile === null) {
+                        state.worldCommsProfile = backup.worldCommsProfile;
+                    }
                     if (backup.view && VALID_VIEWS.has(backup.view)) state.view = backup.view;
                     if (Array.isArray(backup.viewHistory)) {
                         state.viewHistory = backup.viewHistory.filter(v => VALID_VIEWS.has(v)).slice(-VIEW_HISTORY_LIMIT);
@@ -330,6 +482,9 @@ function cleanThreads(threads) {
             state.voicemails = Array.isArray(meta.voicemails) ? meta.voicemails : [];
             state.dialTab = meta.dialTab || 'keypad';
             state.settings = { ...DEFAULT_SETTINGS, ...(meta.settings && typeof meta.settings === 'object' ? meta.settings : {}) };
+            if (typeof meta.worldCommsProfile === 'string' || meta.worldCommsProfile === null) {
+                state.worldCommsProfile = meta.worldCommsProfile;
+            }
             const savedView = meta.view;
             if (savedView && VALID_VIEWS.has(savedView)) state.view = savedView;
             if (Array.isArray(meta.viewHistory)) {
@@ -934,6 +1089,49 @@ function cleanThreads(threads) {
         const style = document.createElement('style');
         style.id = 'phonesocial-theme';
         style.textContent = `
+            /* ─── Theme variables (Diegetic Device Mode — Phase 1) ───
+               Base UI reads chrome colors from these vars. Theme classes
+               (.ps-theme-*) ONLY reassign these vars — never layout — so a
+               theme switch can never regress the base UI. Defaults = modern. */
+            #phonesocial-panel {
+                --ps-chrome-bg:#1c1c1e;      /* statusbar / header / nav / body backdrop */
+                --ps-chrome-fg:#ffffff;      /* text on chrome */
+                --ps-accent:#34c759;         /* signal/battery/active accents */
+                --ps-header-fg:#ffffff;      /* header title */
+                --ps-nav-bg:rgba(28,28,30,0.95);
+                --ps-nav-active:rgba(255,255,255,0.12);
+            }
+            /* ─── Theme: Modern (explicit — same as defaults) ─── */
+            #phonesocial-panel.ps-theme-modern {
+                --ps-chrome-bg:#1c1c1e;
+                --ps-chrome-fg:#ffffff;
+                --ps-accent:#34c759;
+                --ps-header-fg:#ffffff;
+                --ps-nav-bg:rgba(28,28,30,0.95);
+                --ps-nav-active:rgba(255,255,255,0.12);
+            }
+            /* ─── Theme: Fantasy (MirrorNet — deep arcane purple + gold) ─── */
+            #phonesocial-panel.ps-theme-fantasy {
+                --ps-chrome-bg:#2a1a3e;
+                --ps-chrome-fg:#f3e8ff;
+                --ps-accent:#f5c542;
+                --ps-header-fg:#f5c542;
+                --ps-nav-bg:rgba(42,26,62,0.96);
+                --ps-nav-active:rgba(245,197,66,0.22);
+            }
+            #phonesocial-panel.ps-theme-fantasy .ps-app-icon,
+            #phonesocial-panel.ps-theme-fantasy .ps-dock-app-icon {
+                color:var(--ps-accent);
+            }
+            /* ─── Theme: Sci-Fi (CommLink — deep space navy + cyan) ─── */
+            #phonesocial-panel.ps-theme-scifi {
+                --ps-chrome-bg:#0a1628;
+                --ps-chrome-fg:#d6f5ff;
+                --ps-accent:#22d3ee;
+                --ps-header-fg:#22d3ee;
+                --ps-nav-bg:rgba(10,22,40,0.96);
+                --ps-nav-active:rgba(34,211,238,0.22);
+            }
             /* ─── Phone Outer Container (slide-in) ─── */
             #phonesocial-panel {
                 position:relative;
@@ -960,8 +1158,8 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-statusbar {
                 display:flex; justify-content:space-between; align-items:center;
                 padding:8px 18px 4px;
-                background:#1c1c1e;
-                color:#fff;
+                background:var(--ps-chrome-bg);
+                color:var(--ps-chrome-fg);
                 font-size:11px; font-weight:600;
                 flex-shrink:0;
                 min-height:24px;
@@ -983,7 +1181,7 @@ function cleanThreads(threads) {
                 width:2.5px; border-radius:1px;
                 background:rgba(255,255,255,0.35);
             }
-            #phonesocial-panel .ps-signal-bar.active { background:#fff; }
+            #phonesocial-panel .ps-signal-bar.active { background:var(--ps-accent); }
             /* ─── Battery (CSS-drawn, replaces emoji) ─── */
             #phonesocial-panel .ps-battery {
                 display:flex; align-items:center; gap:1px;
@@ -995,7 +1193,7 @@ function cleanThreads(threads) {
             }
             #phonesocial-panel .ps-battery-fill {
                 height:100%; border-radius:1px;
-                background:#34c759;
+                background:var(--ps-accent);
                 transition:width 0.3s;
             }
             #phonesocial-panel .ps-battery-tip {
@@ -1006,7 +1204,7 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-notch {
                 display:flex; justify-content:center; align-items:center;
                 position:relative;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
                 padding:4px 0 8px;
             }
@@ -1019,12 +1217,12 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-header {
                 display:flex; justify-content:space-between; align-items:center;
                 padding:6px 14px;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
                 min-height:36px;
             }
             #phonesocial-panel .ps-header-title {
-                font-size:13px; font-weight:600; color:#fff;
+                font-size:13px; font-weight:600; color:var(--ps-header-fg);
                 letter-spacing:1px;
                 opacity:0.9;
             }
@@ -1046,7 +1244,7 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-body {
                 flex:1; overflow-y:auto;
                 padding:0;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 color:#1c1c1e;
                 -webkit-overflow-scrolling:touch;
             }
@@ -1054,7 +1252,7 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-nav {
                 display:flex; justify-content:space-around; align-items:center;
                 padding:8px 6px;
-                background:rgba(28,28,30,0.95);
+                background:var(--ps-nav-bg);
                 backdrop-filter:blur(10px);
                 -webkit-backdrop-filter:blur(10px);
                 border-top:1px solid rgba(255,255,255,0.08);
@@ -1073,13 +1271,13 @@ function cleanThreads(threads) {
             #phonesocial-panel .ps-nav button:active,
             #phonesocial-panel .ps-nav button.ps-nav-active {
                 color:#fff;
-                background:rgba(255,255,255,0.12);
+                background:var(--ps-nav-active);
             }
             /* ─── Home Indicator ─── */
             #phonesocial-panel .ps-home-indicator {
                 display:flex; justify-content:center; align-items:center;
                 padding:6px 0 10px;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
             }
             #phonesocial-panel .ps-home-indicator .ps-home-pill {
@@ -1096,6 +1294,7 @@ function cleanThreads(threads) {
                 position:absolute; top:0; left:0; right:0; bottom:0;
                 display:flex; flex-direction:column;
                 background:#f2f2f7;
+                padding-bottom:70px;
             }
             #phonesocial-panel .ps-home .ps-wallpaper .ps-time-large {
                 font-size:48px; font-weight:300; color:#1c1c1e;
@@ -1125,6 +1324,10 @@ function cleanThreads(threads) {
             }
             #phonesocial-panel .ps-app:active { transform:scale(0.88); opacity:0.85; }
             #phonesocial-panel .ps-app-icon { font-size:28px; }
+            #phonesocial-panel .ps-app-icon svg,
+            #phonesocial-panel .ps-dock-app-icon svg {
+                width:28px; height:28px; display:inline-block; vertical-align:middle;
+            }
             #phonesocial-panel .ps-app-label {
                 font-size:10px; font-weight:500; color:#1c1c1e;
                 white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -1143,7 +1346,7 @@ function cleanThreads(threads) {
             /* iOS-style dock */
             #phonesocial-panel .ps-dock {
                 display:flex; justify-content:center; gap:12px;
-                margin:12px 16px 6px;
+                margin:12px 16px 60px;
                 padding:8px 12px;
                 background:rgba(255,255,255,0.35);
                 backdrop-filter:blur(20px);
@@ -2110,23 +2313,25 @@ function cleanThreads(threads) {
     }
 
     function getHeaderTitle() {
+        // Profile-aware labels for themeable views; static labels for the rest.
+        const p = (typeof getWorldCommsProfile === 'function') ? getWorldCommsProfile() : null;
         const titles = {
-            'home': 'PhoneSocial',
-            'contacts': 'Contacts',
-            'sms': 'Messages',
+            'home': (p && p.deviceName) || 'PhoneSocial',
+            'contacts': (p && p.contactsLabel) || 'Contacts',
+            'sms': (p && p.messagesLabel) || 'Messages',
             'thread': 'Message',
-            'dial': 'Phone',
+            'dial': (p && p.callsLabel) || 'Phone',
             'settings': 'Settings',
             'profile': 'Profile',
             'albums': 'Wallpapers',
             'memories': 'Memories',
             'call': 'Call',
-            'browser': 'Browser',
-            'chirp': 'Chirp',
+            'browser': (p && p.browserLabel) || 'Browser',
+            'chirp': (p && p.feedLabel) || 'Chirp',
             'chirp-thread': 'Post',
             'favorites': 'Favorites',
         };
-        return titles[state.view] || 'PhoneSocial';
+        return titles[state.view] || ((p && p.deviceName) || 'PhoneSocial');
     }
 
     // ─── Notification Shade (pull-down) ──────────────────────────────
@@ -2248,11 +2453,18 @@ function cleanThreads(threads) {
         if (currentInput && currentInput.value) {
             composeDraft = currentInput.value;
         }
+        // Apply resolved comms-profile theme class to the panel root so
+        // .ps-theme-* CSS variables take effect (chrome recolor). Default modern.
+        try {
+            const themeClass = (typeof getCommsLabel === 'function' && getCommsLabel('themeClass')) || 'ps-theme-modern';
+            panel.classList.remove('ps-theme-modern', 'ps-theme-fantasy', 'ps-theme-scifi');
+            panel.classList.add(themeClass);
+        } catch (_) { /* ignore — falls back to default variables */ }
         panel.innerHTML = `
             <div class="ps-phone-frame">
                 ${buildNotifShade()}
                 <div class="ps-statusbar">
-                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">📱 v8</span>
+                    <span class="ps-sb-carrier" style="font-size:10px;opacity:0.7;font-weight:500">${((typeof getCommsLabel === 'function' && getCommsLabel('statusbarCarrier')) || '📱 PhoneSocial')} · v9</span>
                     <span class="ps-sb-time" id="ps-sb-time">${getStatusBarTime()}</span>
                     <span class="ps-sb-icons">
                         <span class="ps-signal">
@@ -2293,6 +2505,20 @@ function cleanThreads(threads) {
             </div>
         `;
         bindPanel(panel);
+
+        // Wire up World Comms Profile dropdown — auto-save + instant apply (Phase 1)
+        const commsSelect = panel.querySelector('#ps-comms-profile');
+        if (commsSelect && !commsSelect._wired) {
+            commsSelect._wired = true;
+            commsSelect.addEventListener('change', () => {
+                const val = commsSelect.value || 'modern';
+                state.worldCommsProfile = val;              // per-chat override
+                if (state.settings) state.settings.commsProfile = val; // also update global default
+                saveMeta();
+                console.log('[PhoneSocial] 🌍 comms profile → ' + val);
+                render();                                   // instant re-render applies theme + labels
+            });
+        }
 
         // Wire up contact search filter (real-time)
         const searchInput = panel.querySelector('#ps-contact-search');
@@ -2817,40 +3043,40 @@ CRITICAL RULES:
                     <div class="ps-date-large" style="color:${subColor}">${dateStr}</div>
                     <div class="ps-app-grid">
                         <div class="ps-app" style="background:linear-gradient(135deg,#86efac,#4ade80)" data-act="nav" data-view="dial">
-                            <span class="ps-app-icon">📞</span>
-                            <span class="ps-app-label" style="color:${textColor}">Phone</span>
+                            <span class="ps-app-icon">${getAppIcon('dial')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('callsLabel') || 'Phone'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fda4af,#fb7185)" data-act="nav" data-view="sms">
-                            <span class="ps-app-icon">💬</span>
-                            <span class="ps-app-label" style="color:${textColor}">Messages</span>
+                            <span class="ps-app-icon">${getAppIcon('sms')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('messagesLabel') || 'Messages'}</span>
                             ${unreadSms > 0 ? `<span class="ps-badge">${unreadSms > 99 ? '99+' : unreadSms}</span>` : ''}
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#93c5fd,#60a5fa)" data-act="nav" data-view="contacts">
-                            <span class="ps-app-icon">👥</span>
-                            <span class="ps-app-label" style="color:${textColor}">Contacts</span>
+                            <span class="ps-app-icon">${getAppIcon('contacts')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('contactsLabel') || 'Contacts'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fcd34d,#fbbf24)" data-act="nav" data-view="albums">
-                            <span class="ps-app-icon">🎨</span>
+                            <span class="ps-app-icon">${getAppIcon('albums')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Wallpapers</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#d8b4fe,#c084fc)" data-act="nav" data-view="settings">
-                            <span class="ps-app-icon">⚙️</span>
+                            <span class="ps-app-icon">${getAppIcon('settings')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Settings</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#bae6fd,#7dd3fc)" data-act="nav" data-view="browser">
-                            <span class="ps-app-icon">🌐</span>
-                            <span class="ps-app-label" style="color:${textColor}">Browser</span>
+                            <span class="ps-app-icon">${getAppIcon('browser')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('browserLabel') || 'Browser'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9)" data-act="nav" data-view="chirp">
-                            <span class="ps-app-icon">🐦</span>
-                            <span class="ps-app-label" style="color:${textColor}">Chirp</span>
+                            <span class="ps-app-icon">${getAppIcon('chirp')}</span>
+                            <span class="ps-app-label" style="color:${textColor}">${getCommsLabel('feedLabel') || 'Chirp'}</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#fecaca,#f87171)" data-act="nav" data-view="favorites">
-                            <span class="ps-app-icon">❤️</span>
+                            <span class="ps-app-icon">${getAppIcon('favorites')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Favorites</span>
                         </div>
                         <div class="ps-app" style="background:linear-gradient(135deg,#818cf8,#6366f1)" data-act="nav" data-view="memories">
-                            <span class="ps-app-icon">🧠</span>
+                            <span class="ps-app-icon">${getAppIcon('memories')}</span>
                             <span class="ps-app-label" style="color:${textColor}">Memories</span>
                         </div>
                     </div>
@@ -2860,17 +3086,17 @@ CRITICAL RULES:
                     </div>
                     <div class="ps-dock">
                         <div class="ps-dock-app" data-act="nav" data-view="dial">
-                            <span class="ps-dock-app-icon">📞</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Phone</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('dial')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('callsLabel') || 'Phone'}</span>
                         </div>
                         <div class="ps-dock-app" data-act="nav" data-view="sms">
-                            <span class="ps-dock-app-icon">💬</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Messages</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('sms')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('messagesLabel') || 'Messages'}</span>
                             ${unreadSms > 0 ? `<span class="ps-badge">${unreadSms > 99 ? '99+' : unreadSms}</span>` : ''}
                         </div>
                         <div class="ps-dock-app" data-act="nav" data-view="browser">
-                            <span class="ps-dock-app-icon">🌐</span>
-                            <span class="ps-dock-app-label" style="color:${textColor}">Browser</span>
+                            <span class="ps-dock-app-icon">${getAppIcon('browser')}</span>
+                            <span class="ps-dock-app-label" style="color:${textColor}">${getCommsLabel('browserLabel') || 'Browser'}</span>
                         </div>
                     </div>
                     <p class="ps-hint">Swipe right to go back</p>
@@ -3381,8 +3607,17 @@ function viewDial() {
                 </div>
             `;
         }).join('');
+        // ── World Comms Profile (Diegetic Device Mode — Phase 1) ──
+        const activeProfileKey = (typeof getWorldCommsProfileKey === 'function') ? getWorldCommsProfileKey() : 'modern';
+        const commsOptions = (typeof COMMS_PROFILE_OPTIONS !== 'undefined' ? COMMS_PROFILE_OPTIONS : [])
+            .map(o => `<option value="${o.value}"${o.value === activeProfileKey ? ' selected' : ''}>${o.label}</option>`)
+            .join('');
         return `
             <div class="ps-settings" style="padding:12px">
+                <h3 style="margin:0 0 8px; color:#581c87">🌍 Communication Era</h3>
+                <p style="margin:0 0 8px; font-size:11px; color:#8e8e93">Reskin the phone to fit your world. Changes apply instantly to this chat.</p>
+                <select id="ps-comms-profile" style="width:100%; padding:10px; border-radius:8px; border:1px solid #d8b4fe; font-size:13px">${commsOptions}</select>
+                <hr style="margin:16px 0; border:none; border-top:1px solid #e9d5ff">
                 <h3 style="margin:0 0 12px; color:#581c87">SMS API (separate from main chat)</h3>
                 <p style="margin:0 0 12px; font-size:11px; color:#8e8e93">Leave API Key empty to use ST's built-in model instead.</p>
                 <label style="display:block; margin:8px 0 4px; font-size:12px">API URL</label>
@@ -5314,16 +5549,35 @@ function viewAlbums() {
             // ── Execute: trigger calls/texts from matched contacts ──
             for (const c of triggeredContacts) {
                 const personality = inferPersonality(c);
+                // Was this an EXPLICIT phone event? Only UIE tags ([UIE_CALL]/[UIE_TEXT])
+                // and plain-language phone events ("call incoming from X",
+                // "new message from X: ...") set _callTriggered. Those are the ONLY
+                // cases where the AI genuinely narrated a remote phone action, so
+                // they're allowed to bypass the presence gate. Loose Check-1 (name
+                // near a comms verb) and Check-2 (phone blowing up) are NOT explicit
+                // phone events — they must respect scene presence.
+                const isExplicitPhoneEvent = !!c._callTriggered;
                 const shouldCall = c._callTriggered || personality.prefersCall || (personality.initiative >= 7 && Math.random() < 0.4);
                 delete c._callTriggered; // Clean up transient flag
                 c._lastProactiveTime = Date.now();
 
-                console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + ' (AI mentioned contact activity)');
+                console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + (isExplicitPhoneEvent ? ' (explicit phone event)' : ' (loose cue)'));
+
+                // FULL narration-aware presence check for loose cues: if the NPC is
+                // present in the scene AT ALL (speaking line OR mentioned in recent AI
+                // narration), they are physically here and must not phone the user.
+                // Explicit phone events skip this — the AI already said it's remote.
+                if (!isExplicitPhoneEvent && isNpcPresent(c.name)) {
+                    console.log('[PhoneSocial] 🛑 narrative-trigger BLOCKED: ' + c.name + ' is present in scene (loose cue, not explicit phone event)');
+                    continue;
+                }
 
                 if (shouldCall) {
-                    simulateIncomingCall(c, { skipPresenceCheck: true });
+                    // Only explicit phone events bypass simulateIncomingCall's own
+                    // last-line presence defense. Loose cues let it run for safety.
+                    simulateIncomingCall(c, { skipPresenceCheck: isExplicitPhoneEvent });
                 } else {
-                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: true });
+                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: isExplicitPhoneEvent });
                 }
             }
         } catch (e) {
@@ -5758,9 +6012,18 @@ Rules:
 
         // Get up to 80 messages from main chat (deeper scan)
         const recent = ctx.chat.slice(-80);
+        // Strip reasoning/thinking blocks. Some models dump a huge visible
+        // <think>…</think>, <thinking>…</thinking>, or <plan>…</plan> block
+        // into msg.mes, which can balloon a single message to hundreds of
+        // thousands of chars and blow past the truncate limit — leaving the
+        // scan with nothing usable.
+        const stripReasoning = (t) => t
+            .replace(/<(think|thinking|plan|reasoning|reflection)>[\s\S]*?<\/\1>/gi, '')
+            .replace(/<details[^>]*type=["']?(reasoning|thinking)[^>]*>[\s\S]*?<\/details>/gi, '')
+            .trim();
         const msgs = recent.map(msg => {
             const name = msg.name || (msg.is_user ? user : myName);
-            const text = (msg.mes || msg.text || '').trim();
+            const text = stripReasoning((msg.mes || msg.text || '').trim());
             return text ? `${name}: ${text}` : null;
         }).filter(Boolean);
 
@@ -5774,6 +6037,19 @@ Rules:
             const candidate = transcript ? msgs[i] + '\n' + transcript : msgs[i];
             if (candidate.length > TRUNCATE_LIMIT) break;
             transcript = candidate;
+        }
+        // Fallback: if even the single newest message exceeds the limit, the loop
+        // leaves transcript empty. Slice that message (head+tail) so we always
+        // have something to scan instead of aborting with "no chat transcript".
+        if (!transcript && msgs.length) {
+            const newest = msgs[msgs.length - 1];
+            if (newest.length > TRUNCATE_LIMIT) {
+                const half = Math.floor(TRUNCATE_LIMIT / 2);
+                transcript = newest.slice(0, half) + '\n[...]\n' + newest.slice(-half);
+                console.log(`[PhoneSocial] memories scan: newest msg ${newest.length} chars > limit, sliced to ${transcript.length}`);
+            } else {
+                transcript = newest;
+            }
         }
         const finalLen = msgs.join('\n').length;
         if (finalLen !== transcript.length) {

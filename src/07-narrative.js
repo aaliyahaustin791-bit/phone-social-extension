@@ -283,16 +283,35 @@
             // ── Execute: trigger calls/texts from matched contacts ──
             for (const c of triggeredContacts) {
                 const personality = inferPersonality(c);
+                // Was this an EXPLICIT phone event? Only UIE tags ([UIE_CALL]/[UIE_TEXT])
+                // and plain-language phone events ("call incoming from X",
+                // "new message from X: ...") set _callTriggered. Those are the ONLY
+                // cases where the AI genuinely narrated a remote phone action, so
+                // they're allowed to bypass the presence gate. Loose Check-1 (name
+                // near a comms verb) and Check-2 (phone blowing up) are NOT explicit
+                // phone events — they must respect scene presence.
+                const isExplicitPhoneEvent = !!c._callTriggered;
                 const shouldCall = c._callTriggered || personality.prefersCall || (personality.initiative >= 7 && Math.random() < 0.4);
                 delete c._callTriggered; // Clean up transient flag
                 c._lastProactiveTime = Date.now();
 
-                console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + ' (AI mentioned contact activity)');
+                console.log('[PhoneSocial] 📖 narrative trigger: ' + c.name + ' → ' + (shouldCall ? 'call' : 'text') + (isExplicitPhoneEvent ? ' (explicit phone event)' : ' (loose cue)'));
+
+                // FULL narration-aware presence check for loose cues: if the NPC is
+                // present in the scene AT ALL (speaking line OR mentioned in recent AI
+                // narration), they are physically here and must not phone the user.
+                // Explicit phone events skip this — the AI already said it's remote.
+                if (!isExplicitPhoneEvent && isNpcPresent(c.name)) {
+                    console.log('[PhoneSocial] 🛑 narrative-trigger BLOCKED: ' + c.name + ' is present in scene (loose cue, not explicit phone event)');
+                    continue;
+                }
 
                 if (shouldCall) {
-                    simulateIncomingCall(c, { skipPresenceCheck: true });
+                    // Only explicit phone events bypass simulateIncomingCall's own
+                    // last-line presence defense. Loose cues let it run for safety.
+                    simulateIncomingCall(c, { skipPresenceCheck: isExplicitPhoneEvent });
                 } else {
-                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: true });
+                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: isExplicitPhoneEvent });
                 }
             }
         } catch (e) {

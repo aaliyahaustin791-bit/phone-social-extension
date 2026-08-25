@@ -169,9 +169,18 @@ Rules:
 
         // Get up to 80 messages from main chat (deeper scan)
         const recent = ctx.chat.slice(-80);
+        // Strip reasoning/thinking blocks. Some models dump a huge visible
+        // <think>…</think>, <thinking>…</thinking>, or <plan>…</plan> block
+        // into msg.mes, which can balloon a single message to hundreds of
+        // thousands of chars and blow past the truncate limit — leaving the
+        // scan with nothing usable.
+        const stripReasoning = (t) => t
+            .replace(/<(think|thinking|plan|reasoning|reflection)>[\s\S]*?<\/\1>/gi, '')
+            .replace(/<details[^>]*type=["']?(reasoning|thinking)[^>]*>[\s\S]*?<\/details>/gi, '')
+            .trim();
         const msgs = recent.map(msg => {
             const name = msg.name || (msg.is_user ? user : myName);
-            const text = (msg.mes || msg.text || '').trim();
+            const text = stripReasoning((msg.mes || msg.text || '').trim());
             return text ? `${name}: ${text}` : null;
         }).filter(Boolean);
 
@@ -185,6 +194,19 @@ Rules:
             const candidate = transcript ? msgs[i] + '\n' + transcript : msgs[i];
             if (candidate.length > TRUNCATE_LIMIT) break;
             transcript = candidate;
+        }
+        // Fallback: if even the single newest message exceeds the limit, the loop
+        // leaves transcript empty. Slice that message (head+tail) so we always
+        // have something to scan instead of aborting with "no chat transcript".
+        if (!transcript && msgs.length) {
+            const newest = msgs[msgs.length - 1];
+            if (newest.length > TRUNCATE_LIMIT) {
+                const half = Math.floor(TRUNCATE_LIMIT / 2);
+                transcript = newest.slice(0, half) + '\n[...]\n' + newest.slice(-half);
+                console.log(`[PhoneSocial] memories scan: newest msg ${newest.length} chars > limit, sliced to ${transcript.length}`);
+            } else {
+                transcript = newest;
+            }
         }
         const finalLen = msgs.join('\n').length;
         if (finalLen !== transcript.length) {

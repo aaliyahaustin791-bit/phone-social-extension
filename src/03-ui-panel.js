@@ -120,6 +120,49 @@
         const style = document.createElement('style');
         style.id = 'phonesocial-theme';
         style.textContent = `
+            /* ─── Theme variables (Diegetic Device Mode — Phase 1) ───
+               Base UI reads chrome colors from these vars. Theme classes
+               (.ps-theme-*) ONLY reassign these vars — never layout — so a
+               theme switch can never regress the base UI. Defaults = modern. */
+            #phonesocial-panel {
+                --ps-chrome-bg:#1c1c1e;      /* statusbar / header / nav / body backdrop */
+                --ps-chrome-fg:#ffffff;      /* text on chrome */
+                --ps-accent:#34c759;         /* signal/battery/active accents */
+                --ps-header-fg:#ffffff;      /* header title */
+                --ps-nav-bg:rgba(28,28,30,0.95);
+                --ps-nav-active:rgba(255,255,255,0.12);
+            }
+            /* ─── Theme: Modern (explicit — same as defaults) ─── */
+            #phonesocial-panel.ps-theme-modern {
+                --ps-chrome-bg:#1c1c1e;
+                --ps-chrome-fg:#ffffff;
+                --ps-accent:#34c759;
+                --ps-header-fg:#ffffff;
+                --ps-nav-bg:rgba(28,28,30,0.95);
+                --ps-nav-active:rgba(255,255,255,0.12);
+            }
+            /* ─── Theme: Fantasy (MirrorNet — deep arcane purple + gold) ─── */
+            #phonesocial-panel.ps-theme-fantasy {
+                --ps-chrome-bg:#2a1a3e;
+                --ps-chrome-fg:#f3e8ff;
+                --ps-accent:#f5c542;
+                --ps-header-fg:#f5c542;
+                --ps-nav-bg:rgba(42,26,62,0.96);
+                --ps-nav-active:rgba(245,197,66,0.22);
+            }
+            #phonesocial-panel.ps-theme-fantasy .ps-app-icon,
+            #phonesocial-panel.ps-theme-fantasy .ps-dock-app-icon {
+                color:var(--ps-accent);
+            }
+            /* ─── Theme: Sci-Fi (CommLink — deep space navy + cyan) ─── */
+            #phonesocial-panel.ps-theme-scifi {
+                --ps-chrome-bg:#0a1628;
+                --ps-chrome-fg:#d6f5ff;
+                --ps-accent:#22d3ee;
+                --ps-header-fg:#22d3ee;
+                --ps-nav-bg:rgba(10,22,40,0.96);
+                --ps-nav-active:rgba(34,211,238,0.22);
+            }
             /* ─── Phone Outer Container (slide-in) ─── */
             #phonesocial-panel {
                 position:relative;
@@ -146,8 +189,8 @@
             #phonesocial-panel .ps-statusbar {
                 display:flex; justify-content:space-between; align-items:center;
                 padding:8px 18px 4px;
-                background:#1c1c1e;
-                color:#fff;
+                background:var(--ps-chrome-bg);
+                color:var(--ps-chrome-fg);
                 font-size:11px; font-weight:600;
                 flex-shrink:0;
                 min-height:24px;
@@ -169,7 +212,7 @@
                 width:2.5px; border-radius:1px;
                 background:rgba(255,255,255,0.35);
             }
-            #phonesocial-panel .ps-signal-bar.active { background:#fff; }
+            #phonesocial-panel .ps-signal-bar.active { background:var(--ps-accent); }
             /* ─── Battery (CSS-drawn, replaces emoji) ─── */
             #phonesocial-panel .ps-battery {
                 display:flex; align-items:center; gap:1px;
@@ -181,7 +224,7 @@
             }
             #phonesocial-panel .ps-battery-fill {
                 height:100%; border-radius:1px;
-                background:#34c759;
+                background:var(--ps-accent);
                 transition:width 0.3s;
             }
             #phonesocial-panel .ps-battery-tip {
@@ -192,7 +235,7 @@
             #phonesocial-panel .ps-notch {
                 display:flex; justify-content:center; align-items:center;
                 position:relative;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
                 padding:4px 0 8px;
             }
@@ -205,12 +248,12 @@
             #phonesocial-panel .ps-header {
                 display:flex; justify-content:space-between; align-items:center;
                 padding:6px 14px;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
                 min-height:36px;
             }
             #phonesocial-panel .ps-header-title {
-                font-size:13px; font-weight:600; color:#fff;
+                font-size:13px; font-weight:600; color:var(--ps-header-fg);
                 letter-spacing:1px;
                 opacity:0.9;
             }
@@ -232,7 +275,7 @@
             #phonesocial-panel .ps-body {
                 flex:1; overflow-y:auto;
                 padding:0;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 color:#1c1c1e;
                 -webkit-overflow-scrolling:touch;
             }
@@ -240,7 +283,7 @@
             #phonesocial-panel .ps-nav {
                 display:flex; justify-content:space-around; align-items:center;
                 padding:8px 6px;
-                background:rgba(28,28,30,0.95);
+                background:var(--ps-nav-bg);
                 backdrop-filter:blur(10px);
                 -webkit-backdrop-filter:blur(10px);
                 border-top:1px solid rgba(255,255,255,0.08);
@@ -259,13 +302,13 @@
             #phonesocial-panel .ps-nav button:active,
             #phonesocial-panel .ps-nav button.ps-nav-active {
                 color:#fff;
-                background:rgba(255,255,255,0.12);
+                background:var(--ps-nav-active);
             }
             /* ─── Home Indicator ─── */
             #phonesocial-panel .ps-home-indicator {
                 display:flex; justify-content:center; align-items:center;
                 padding:6px 0 10px;
-                background:#1c1c1e;
+                background:var(--ps-chrome-bg);
                 flex-shrink:0;
             }
             #phonesocial-panel .ps-home-indicator .ps-home-pill {
@@ -282,6 +325,7 @@
                 position:absolute; top:0; left:0; right:0; bottom:0;
                 display:flex; flex-direction:column;
                 background:#f2f2f7;
+                padding-bottom:70px;
             }
             #phonesocial-panel .ps-home .ps-wallpaper .ps-time-large {
                 font-size:48px; font-weight:300; color:#1c1c1e;
@@ -311,6 +355,10 @@
             }
             #phonesocial-panel .ps-app:active { transform:scale(0.88); opacity:0.85; }
             #phonesocial-panel .ps-app-icon { font-size:28px; }
+            #phonesocial-panel .ps-app-icon svg,
+            #phonesocial-panel .ps-dock-app-icon svg {
+                width:28px; height:28px; display:inline-block; vertical-align:middle;
+            }
             #phonesocial-panel .ps-app-label {
                 font-size:10px; font-weight:500; color:#1c1c1e;
                 white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -329,7 +377,7 @@
             /* iOS-style dock */
             #phonesocial-panel .ps-dock {
                 display:flex; justify-content:center; gap:12px;
-                margin:12px 16px 6px;
+                margin:12px 16px 60px;
                 padding:8px 12px;
                 background:rgba(255,255,255,0.35);
                 backdrop-filter:blur(20px);
@@ -1296,23 +1344,25 @@
     }
 
     function getHeaderTitle() {
+        // Profile-aware labels for themeable views; static labels for the rest.
+        const p = (typeof getWorldCommsProfile === 'function') ? getWorldCommsProfile() : null;
         const titles = {
-            'home': 'PhoneSocial',
-            'contacts': 'Contacts',
-            'sms': 'Messages',
+            'home': (p && p.deviceName) || 'PhoneSocial',
+            'contacts': (p && p.contactsLabel) || 'Contacts',
+            'sms': (p && p.messagesLabel) || 'Messages',
             'thread': 'Message',
-            'dial': 'Phone',
+            'dial': (p && p.callsLabel) || 'Phone',
             'settings': 'Settings',
             'profile': 'Profile',
             'albums': 'Wallpapers',
             'memories': 'Memories',
             'call': 'Call',
-            'browser': 'Browser',
-            'chirp': 'Chirp',
+            'browser': (p && p.browserLabel) || 'Browser',
+            'chirp': (p && p.feedLabel) || 'Chirp',
             'chirp-thread': 'Post',
             'favorites': 'Favorites',
         };
-        return titles[state.view] || 'PhoneSocial';
+        return titles[state.view] || ((p && p.deviceName) || 'PhoneSocial');
     }
 
     // ─── Notification Shade (pull-down) ──────────────────────────────
