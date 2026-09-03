@@ -76,7 +76,18 @@
             }
             console.log('[PhoneSocial] launcher v2 (draggable) active');
         }
+        // TEMP telemetry (remove once drag is confirmed): toasts every gesture
+        // stage so the user can read back exactly what the browser fires.
+        let psTelLast = 0;
+        const psTel = (msg) => {
+            const now = Date.now();
+            if (now - psTelLast < 650) return;
+            psTelLast = now;
+            console.log('[PhoneSocial]', msg);
+            try { if (typeof window.toastr !== 'undefined') window.toastr.info('📱 ' + msg); } catch (_e) { /* ignore */ }
+        };
         const psStartDrag = (clientX, clientY) => {
+            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY));
             btn.__psDragged = false;
             const startX = clientX;
             const startY = clientY;
@@ -84,6 +95,7 @@
             const baseX = rect.left;
             const baseY = rect.top;
             let moved = false;
+            let lastTel = 0;
             const onMove = (ev) => {
                 const dx = ev.clientX - startX;
                 const dy = ev.clientY - startY;
@@ -92,8 +104,14 @@
                     moved = true;
                     btn.__psDragged = true;
                     btn.style.transition = 'none';
+                    psTel('drag started');
                 }
                 psBtnApply(btn, baseX + dx, baseY + dy);
+                const now = Date.now();
+                if (now - lastTel > 900) {
+                    lastTel = now;
+                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy));
+                }
                 if (ev.cancelable) ev.preventDefault();
             };
             const onMoveTouch = (ev) => {
@@ -103,24 +121,29 @@
             const onUp = () => {
                 document.removeEventListener('pointermove', onMove);
                 document.removeEventListener('pointerup', onUp);
-                document.removeEventListener('pointercancel', onUp);
+                document.removeEventListener('pointercancel', onCancel);
                 document.removeEventListener('touchmove', onMoveTouch);
                 document.removeEventListener('touchend', onUp);
-                document.removeEventListener('touchcancel', onUp);
+                document.removeEventListener('touchcancel', onCancel);
+                psTel(moved ? 'dropped — saved position' : 'no move (tap)');
                 if (moved) {
                     const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
                 }
             };
+            const onCancel = () => {
+                psTel('gesture CANCELED by browser');
+                onUp();
+            };
             // Register BOTH pointer and touch: browsers fire both for a touch;
             // double application is idempotent and the first onUp cleans up.
             document.addEventListener('pointermove', onMove, { passive: false });
             document.addEventListener('pointerup', onUp);
-            document.addEventListener('pointercancel', onUp);
+            document.addEventListener('pointercancel', onCancel);
             document.addEventListener('touchmove', onMoveTouch, { passive: false });
             document.addEventListener('touchend', onUp);
-            document.addEventListener('touchcancel', onUp);
+            document.addEventListener('touchcancel', onCancel);
         };
         if (window.PointerEvent) {
             btn.addEventListener('pointerdown', (e) => {
