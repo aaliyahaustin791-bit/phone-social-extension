@@ -967,6 +967,56 @@ function cleanThreads(threads) {
     // -------------------------------------------------------------------
     // UI
     // -------------------------------------------------------------------
+    // -------------------------------------------------------------------
+    // Draggable launcher (📱) — position persisted to localStorage so the
+    // button stays where the user put it across reloads and panel toggles.
+    // -------------------------------------------------------------------
+    const PS_BTN_SIZE = 52;
+    let psBtnPos = null; // last known {x,y} in px
+
+    function psBtnClamp(x, y) {
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const maxX = Math.max(4, vw - PS_BTN_SIZE - 4);
+        const maxY = Math.max(4, vh - PS_BTN_SIZE - 4);
+        return { x: Math.max(4, Math.min(Math.round(x), maxX)), y: Math.max(4, Math.min(Math.round(y), maxY)) };
+    }
+
+    function psBtnDefaultPos() {
+        return psBtnClamp((window.innerWidth || document.documentElement.clientWidth) - PS_BTN_SIZE - 12, 80);
+    }
+
+    function psBtnLoadPos() {
+        try {
+            const raw = localStorage.getItem('PhoneSocial_btnPos');
+            if (raw) {
+                const p = JSON.parse(raw);
+                if (p && typeof p.x === 'number' && typeof p.y === 'number') return psBtnClamp(p.x, p.y);
+            }
+        } catch (_e) { /* ignore */ }
+        return null;
+    }
+
+    function psBtnSavePos(x, y) {
+        try { localStorage.setItem('PhoneSocial_btnPos', JSON.stringify({ x, y })); } catch (_e) { /* ignore */ }
+    }
+
+    function psBtnApply(el, x, y) {
+        const p = psBtnClamp(x, y);
+        el.style.left = p.x + 'px';
+        el.style.top = p.y + 'px';
+        return p;
+    }
+
+    function psBtnRemember(el) {
+        const r = el.getBoundingClientRect();
+        if (r.width && r.height) {
+            const p = psBtnClamp(r.left, r.top);
+            psBtnPos = p;
+            psBtnSavePos(p.x, p.y);
+        }
+    }
+
     function ensureButton() {
         if (document.getElementById('phonesocial-btn')) return;
         const btn = document.createElement('button');
@@ -977,10 +1027,50 @@ function cleanThreads(threads) {
         const handler = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            // A completed drag fires a click on release — don't toggle then.
+            if (btn.__psDragged) { btn.__psDragged = false; return; }
             console.log('[PhoneSocial] button handler fired');
             togglePanel();
         };
         btn.addEventListener('click', handler);
+        // Draggable via pointer events (mouse + touch unified). touch-action
+        // none stops the browser from hijacking the drag for page scrolling.
+        btn.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            btn.__psDragged = false;
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const rect = btn.getBoundingClientRect();
+            const baseX = rect.left;
+            const baseY = rect.top;
+            let moved = false;
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                if (!moved) {
+                    if (Math.hypot(dx, dy) < 6) return; // still a tap
+                    moved = true;
+                    btn.__psDragged = true;
+                }
+                psBtnApply(btn, baseX + dx, baseY + dy);
+                ev.preventDefault();
+            };
+            const onUp = () => {
+                btn.removeEventListener('pointermove', onMove);
+                btn.removeEventListener('pointerup', onUp);
+                btn.removeEventListener('pointercancel', onUp);
+                try { btn.releasePointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+                if (moved) {
+                    const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
+                    psBtnPos = p;
+                    psBtnSavePos(p.x, p.y);
+                }
+            };
+            try { btn.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+            btn.addEventListener('pointermove', onMove, { passive: false });
+            btn.addEventListener('pointerup', onUp);
+            btn.addEventListener('pointercancel', onUp);
+        });
         // DO NOT add touchend — on mobile the browser synthesizes click after touchend
         // and double-firing causes: first touch opens+ hides btn, second click re-closes
         // then re-opens panel with btn stuck hidden forever.
@@ -991,8 +1081,6 @@ function cleanThreads(threads) {
         // x=827, off-screen).
         btn.style.cssText = [
             'position:fixed',
-            'left:calc(100vw - 64px)',
-            'top:80px',
             'right:auto',
             'bottom:auto',
             'width:52px',
@@ -1003,24 +1091,30 @@ function cleanThreads(threads) {
             'justify-content:center',
             'border-radius:50%',
             'border:2px solid #fff',
-            'border:2px solid #fff',
             'color:#fff',
             'font-size:22px',
             'line-height:1',
             'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
             'cursor:pointer',
+            'touch-action:none',
+            'user-select:none',
+            '-webkit-user-select:none',
             'padding:0',
             'margin:0',
             'visibility:visible',
             'opacity:1',
             'pointer-events:auto',
         ].join(';') + ';';
+        // Apply saved position (or the top-right default), clamped on-screen.
+        const p0 = psBtnLoadPos() || psBtnDefaultPos();
+        psBtnPos = psBtnApply(btn, p0.x, p0.y);
         // Append to <html> instead of <body> — escapes any body-level transforms.
         (document.documentElement || document.body).appendChild(btn);
-        // Re-anchor on resize/orientation change.
+        // Keep the button on-screen (and where the user left it) on resize /
+        // orientation change — no snap-back to the default corner.
         const reposition = () => {
-            btn.style.left = 'calc(100vw - 64px)';
-            btn.style.top = '80px';
+            const p = psBtnPos || psBtnLoadPos() || psBtnDefaultPos();
+            psBtnPos = psBtnApply(btn, p.x, p.y);
         };
         window.addEventListener('resize', reposition, { passive: true });
         window.addEventListener('orientationchange', reposition, { passive: true });
@@ -2254,31 +2348,34 @@ function cleanThreads(threads) {
             panel.style.opacity = '0';
             panel.style.pointerEvents = 'none';
             isPanelOpen = false;
-            if (btn) btn.style.cssText = [
-                'position:fixed',
-                'left:calc(100vw - 64px)',
-                'top:80px',
-                'right:auto',
-                'bottom:auto',
-                'width:52px',
-                'height:52px',
-                'z-index:10050',
-                'display:flex !important', // Force display
-                'align-items:center',
-                'justify-content:center',
-                'border-radius:50%',
-                'border:2px solid #fff',
-                'color:#fff',
-                'font-size:22px',
-                'line-height:1',
-                'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
-                'cursor:pointer',
-                'padding:0',
-                'margin:0',
-                'visibility:visible !important', // Force visibility
-                'opacity:1 !important', // Force opacity
-                'pointer-events:auto !important', // Force pointer events
-            ].join(';') + ';';
+            if (btn) {
+                btn.style.cssText = [
+                    'position:fixed',
+                    'right:auto',
+                    'bottom:auto',
+                    'width:52px',
+                    'height:52px',
+                    'z-index:10050',
+                    'display:flex !important', // Force display
+                    'align-items:center',
+                    'justify-content:center',
+                    'border-radius:50%',
+                    'border:2px solid #fff',
+                    'color:#fff',
+                    'font-size:22px',
+                    'line-height:1',
+                    'box-shadow:0 4px 14px rgba(0,0,0,0.6)',
+                    'cursor:pointer',
+                    'padding:0',
+                    'margin:0',
+                    'visibility:visible !important', // Force visibility
+                    'opacity:1 !important', // Force opacity
+                    'pointer-events:auto !important', // Force pointer events
+                ].join(';') + ';';
+                // Keep the dragged position — never snap back to the corner.
+                const p = psBtnPos || psBtnLoadPos() || psBtnDefaultPos();
+                psBtnPos = psBtnApply(btn, p.x, p.y);
+            }
             stopCallTimer();
             setTimeout(() => { panel.style.display = 'none'; }, 260);
         } else {
@@ -2294,7 +2391,10 @@ function cleanThreads(threads) {
             panel.style.visibility = 'visible';
             panel.style.opacity = '1';
             panel.style.pointerEvents = 'auto';
-            if (btn) btn.style.cssText = 'display:none !important; pointer-events:none !important; visibility:hidden !important; opacity:0 !important;';
+            if (btn) {
+                psBtnRemember(btn); // stash position BEFORE hiding (rect is 0 when display:none)
+                btn.style.cssText = 'display:none !important; pointer-events:none !important; visibility:hidden !important; opacity:0 !important;';
+            }
         }
     }
 
