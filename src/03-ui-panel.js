@@ -58,8 +58,16 @@
         const handler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            // A completed drag fires a click on release — don't toggle then.
-            if (btn.__psDragged) { btn.__psDragged = false; return; }
+            // A completed drag fires (possibly multiple) clicks on release —
+            // suppress them, plus a 500ms guard window so Kiwi's touch→mouse
+            // compat double-click can't slip in AFTER the first suppression
+            // clears the flag.
+            const now = Date.now();
+            if (btn.__psDragged || now < (btn.__psClickGuardUntil || 0)) {
+                btn.__psDragged = false;
+                btn.__psClickGuardUntil = now + 500;
+                return;
+            }
             console.log('[PhoneSocial] button handler fired');
             togglePanel();
         };
@@ -103,14 +111,16 @@
                     if (Math.hypot(dx, dy) < 6) return; // still a tap
                     moved = true;
                     btn.__psDragged = true;
+                    btn.__psClickGuardUntil = Date.now() + 500;
                     btn.style.transition = 'none';
+                    btn.style.borderColor = '#ff00ff'; // drag engaged marker
                     psTel('drag started');
                 }
                 psBtnApply(btn, baseX + dx, baseY + dy);
                 const now = Date.now();
                 if (now - lastTel > 900) {
                     lastTel = now;
-                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy));
+                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy) + ' left=' + btn.style.left);
                 }
                 if (ev.cancelable) ev.preventDefault();
             };
@@ -130,6 +140,7 @@
                     const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
+                    setTimeout(() => { btn.style.borderColor = '#fff'; }, 300);
                 }
             };
             const onCancel = () => {
