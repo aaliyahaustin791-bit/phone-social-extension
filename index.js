@@ -1033,13 +1033,22 @@ function cleanThreads(threads) {
             togglePanel();
         };
         btn.addEventListener('click', handler);
-        // Draggable via pointer events (mouse + touch unified). touch-action
-        // none stops the browser from hijacking the drag for page scrolling.
-        btn.addEventListener('pointerdown', (e) => {
-            if (e.pointerType === 'mouse' && e.button !== 0) return;
+        // Draggable launcher v2 — pointer events with DOCUMENT-level move/up
+        // listeners so the drag survives the finger leaving the small button,
+        // plus a touch-event fallback for browsers without PointerEvent.
+        // touch-action:none stops the browser hijacking the drag for scroll.
+        btn.dataset.psDrag = 'v2';
+        if (!btn.__psToastShown) {
+            btn.__psToastShown = true;
+            if (typeof window.toastr !== 'undefined') {
+                try { window.toastr.info('📱 launcher v2 — drag me anywhere'); } catch (_e) { /* ignore */ }
+            }
+            console.log('[PhoneSocial] launcher v2 (draggable) active');
+        }
+        const psStartDrag = (clientX, clientY) => {
             btn.__psDragged = false;
-            const startX = e.clientX;
-            const startY = e.clientY;
+            const startX = clientX;
+            const startY = clientY;
             const rect = btn.getBoundingClientRect();
             const baseX = rect.left;
             const baseY = rect.top;
@@ -1051,26 +1060,49 @@ function cleanThreads(threads) {
                     if (Math.hypot(dx, dy) < 6) return; // still a tap
                     moved = true;
                     btn.__psDragged = true;
+                    btn.style.transition = 'none';
                 }
                 psBtnApply(btn, baseX + dx, baseY + dy);
-                ev.preventDefault();
+                if (ev.cancelable) ev.preventDefault();
+            };
+            const onMoveTouch = (ev) => {
+                const t = ev.touches && ev.touches[0];
+                if (t) onMove(t);
             };
             const onUp = () => {
-                btn.removeEventListener('pointermove', onMove);
-                btn.removeEventListener('pointerup', onUp);
-                btn.removeEventListener('pointercancel', onUp);
-                try { btn.releasePointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointercancel', onUp);
+                document.removeEventListener('touchmove', onMoveTouch);
+                document.removeEventListener('touchend', onUp);
+                document.removeEventListener('touchcancel', onUp);
                 if (moved) {
                     const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
                 }
             };
-            try { btn.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
-            btn.addEventListener('pointermove', onMove, { passive: false });
-            btn.addEventListener('pointerup', onUp);
-            btn.addEventListener('pointercancel', onUp);
-        });
+            // Register BOTH pointer and touch: browsers fire both for a touch;
+            // double application is idempotent and the first onUp cleans up.
+            document.addEventListener('pointermove', onMove, { passive: false });
+            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointercancel', onUp);
+            document.addEventListener('touchmove', onMoveTouch, { passive: false });
+            document.addEventListener('touchend', onUp);
+            document.addEventListener('touchcancel', onUp);
+        };
+        if (window.PointerEvent) {
+            btn.addEventListener('pointerdown', (e) => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                psStartDrag(e.clientX, e.clientY);
+            });
+        } else {
+            btn.addEventListener('touchstart', (e) => {
+                const t = e.touches && e.touches[0];
+                if (!t) return;
+                psStartDrag(t.clientX, t.clientY);
+            }, { passive: false });
+        }
         // DO NOT add touchend — on mobile the browser synthesizes click after touchend
         // and double-firing causes: first touch opens+ hides btn, second click re-closes
         // then re-opens panel with btn stuck hidden forever.
