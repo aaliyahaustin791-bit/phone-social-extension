@@ -2,10 +2,10 @@
 
 #phonesocial-btn {
     position: fixed !important;
-    /* Anchor to viewport via calc(100vw) — `right:` can fail when document is wider than viewport on mobile */
-    left: calc(100vw - 64px) !important;
+    /* Position is set INLINE by ensureButton() (draggable, persisted) — this
+       stylesheet must NOT pin left/top/transform, or dragging is impossible
+       (!important here would override the inline drag styles). */
     right: auto !important;
-    top: 80px !important;
     bottom: auto !important;
     width: 52px !important;
     height: 52px !important;
@@ -30,9 +30,8 @@
     visibility: visible !important;
     opacity: 1 !important;
     pointer-events: auto !important;
-    transform: none !important;
-    /* Prevent the button itself from being pushed by ancestor transforms */
-    will-change: auto !important;
+    /* No transform pin here: the drag handler moves the button with an inline
+       transform during the gesture, then commits left/top on release. */
 }
 #phonesocial-btn:active { transform: scale(0.95); }
 
