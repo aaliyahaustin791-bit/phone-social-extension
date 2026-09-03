@@ -1027,11 +1027,19 @@ function cleanThreads(threads) {
         const handler = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            const now = Date.now();
+            // Forensics toast: WHY is this click running? dragged flag, guard
+            // window, time since the last suppression.
+            try {
+                if (typeof window.toastr !== 'undefined') {
+                    window.toastr.info('📱 click: dragged=' + (btn.__psDragged ? 1 : 0)
+                        + ' guard=' + (now < (btn.__psClickGuardUntil || 0) ? 1 : 0));
+                }
+            } catch (_e) { /* ignore */ }
             // A completed drag fires (possibly multiple) clicks on release —
             // suppress them, plus a 500ms guard window so Kiwi's touch→mouse
             // compat double-click can't slip in AFTER the first suppression
             // clears the flag.
-            const now = Date.now();
             if (btn.__psDragged || now < (btn.__psClickGuardUntil || 0)) {
                 btn.__psDragged = false;
                 btn.__psClickGuardUntil = now + 500;
@@ -1058,13 +1066,17 @@ function cleanThreads(threads) {
         let psTelLast = 0;
         const psTel = (msg) => {
             const now = Date.now();
-            if (now - psTelLast < 650) return;
+            if (now - psTelLast < 250) return;
             psTelLast = now;
             console.log('[PhoneSocial]', msg);
             try { if (typeof window.toastr !== 'undefined') window.toastr.info('📱 ' + msg); } catch (_e) { /* ignore */ }
         };
+        const psBtnRectTxt = () => {
+            const r = btn.getBoundingClientRect();
+            return 'rect=' + Math.round(r.left) + ',' + Math.round(r.top);
+        };
         const psStartDrag = (clientX, clientY) => {
-            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY));
+            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY) + ' ' + psBtnRectTxt());
             btn.__psDragged = false;
             const startX = clientX;
             const startY = clientY;
@@ -1083,13 +1095,15 @@ function cleanThreads(threads) {
                     btn.__psClickGuardUntil = Date.now() + 500;
                     btn.style.transition = 'none';
                     btn.style.borderColor = '#ff00ff'; // drag engaged marker
-                    psTel('drag started');
+                    btn.style.outline = '3px solid #ff00ff';
+                    psTel('drag started (moving now)');
                 }
                 psBtnApply(btn, baseX + dx, baseY + dy);
                 const now = Date.now();
                 if (now - lastTel > 900) {
                     lastTel = now;
-                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy) + ' left=' + btn.style.left);
+                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy)
+                        + ' style.left=' + btn.style.left + ' ' + psBtnRectTxt());
                 }
                 if (ev.cancelable) ev.preventDefault();
             };
@@ -1104,12 +1118,17 @@ function cleanThreads(threads) {
                 document.removeEventListener('touchmove', onMoveTouch);
                 document.removeEventListener('touchend', onUp);
                 document.removeEventListener('touchcancel', onCancel);
-                psTel(moved ? 'dropped — saved position' : 'no move (tap)');
                 if (moved) {
                     const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
-                    setTimeout(() => { btn.style.borderColor = '#fff'; }, 300);
+                    psTel('UP moved ✓ saved ' + p.x + ',' + p.y);
+                    setTimeout(() => {
+                        btn.style.borderColor = '#fff';
+                        btn.style.outline = 'none';
+                    }, 350);
+                } else {
+                    psTel('UP no-move (tap) ' + psBtnRectTxt());
                 }
             };
             const onCancel = () => {
