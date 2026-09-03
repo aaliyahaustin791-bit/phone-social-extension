@@ -107,6 +107,14 @@
             return 'rect=' + Math.round(r.left) + ',' + Math.round(r.top);
         };
         const psStartDrag = (clientX, clientY) => {
+            // Kill any leaked previous session FIRST — two live drag sessions
+            // (one from an earlier gesture whose pointerup was missed) fight
+            // each other and the button barely moves.
+            if (btn.__psCleanup) {
+                try { btn.__psCleanup(); } catch (_e) { /* ignore */ }
+                btn.__psCleanup = null;
+                psTel('(killed stale drag session)');
+            }
             // Forensics: is the element under the finger the element we move?
             let hitInfo = 'hit=?';
             try {
@@ -147,7 +155,9 @@
                 const now = Date.now();
                 if (now - lastTel > 900) {
                     lastTel = now;
-                    psTel('moving ' + Math.round(dx) + ',' + Math.round(dy)
+                    const r = btn.getBoundingClientRect();
+                    psTel('finger ' + Math.round(dx) + ',' + Math.round(dy)
+                        + ' btnΔ ' + Math.round(r.left - baseLeft) + ',' + Math.round(r.top - baseTop)
                         + ' ' + psBtnRectTxt());
                 }
                 if (ev.cancelable) ev.preventDefault();
@@ -156,13 +166,17 @@
                 const t = ev.touches && ev.touches[0];
                 if (t) onMove(t);
             };
-            const onUp = () => {
+            const cleanup = () => {
                 document.removeEventListener('pointermove', onMove);
                 document.removeEventListener('pointerup', onUp);
                 document.removeEventListener('pointercancel', onCancel);
                 document.removeEventListener('touchmove', onMoveTouch);
                 document.removeEventListener('touchend', onUp);
                 document.removeEventListener('touchcancel', onCancel);
+            };
+            const onUp = () => {
+                cleanup();
+                if (btn.__psCleanup === cleanup) btn.__psCleanup = null;
                 if (moved) {
                     // Commit transform to real position, then clear it.
                     const r = btn.getBoundingClientRect();
@@ -192,6 +206,7 @@
             document.addEventListener('touchmove', onMoveTouch, { passive: false });
             document.addEventListener('touchend', onUp);
             document.addEventListener('touchcancel', onCancel);
+            btn.__psCleanup = cleanup;
         };
         if (window.PointerEvent) {
             btn.addEventListener('pointerdown', (e) => {
