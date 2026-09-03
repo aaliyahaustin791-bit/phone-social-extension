@@ -107,13 +107,27 @@
             return 'rect=' + Math.round(r.left) + ',' + Math.round(r.top);
         };
         const psStartDrag = (clientX, clientY) => {
-            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY) + ' ' + psBtnRectTxt());
+            // Forensics: is the element under the finger the element we move?
+            let hitInfo = 'hit=?';
+            try {
+                const hit = document.elementFromPoint(clientX, clientY);
+                hitInfo = 'hit=' + (hit ? hit.tagName + '#' + (hit.id || hit.className || '') : 'none')
+                    + (hit === btn ? ' (==btn)' : ' (≠btn!)');
+            } catch (_e) { /* ignore */ }
+            const vv = window.visualViewport;
+            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY) + ' ' + psBtnRectTxt()
+                + ' dpr=' + (window.devicePixelRatio || 1)
+                + ' zoom=' + (vv && vv.scale ? vv.scale.toFixed(2) : '1')
+                + ' ' + hitInfo);
             btn.__psDragged = false;
             const startX = clientX;
             const startY = clientY;
-            const rect = btn.getBoundingClientRect();
-            const baseX = rect.left;
-            const baseY = rect.top;
+            // Move via transform during the gesture (GPU layer, immune to any
+            // left/top override); commit to left/top on release.
+            const rect0 = btn.getBoundingClientRect();
+            const baseLeft = rect0.left;
+            const baseTop = rect0.top;
+            btn.style.transform = 'translate(0px, 0px)';
             let moved = false;
             let lastTel = 0;
             const onMove = (ev) => {
@@ -129,12 +143,12 @@
                     btn.style.outline = '3px solid #ff00ff';
                     psTel('drag started (moving now)');
                 }
-                psBtnApply(btn, baseX + dx, baseY + dy);
+                btn.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
                 const now = Date.now();
                 if (now - lastTel > 900) {
                     lastTel = now;
                     psTel('moving ' + Math.round(dx) + ',' + Math.round(dy)
-                        + ' style.left=' + btn.style.left + ' ' + psBtnRectTxt());
+                        + ' ' + psBtnRectTxt());
                 }
                 if (ev.cancelable) ev.preventDefault();
             };
@@ -150,7 +164,10 @@
                 document.removeEventListener('touchend', onUp);
                 document.removeEventListener('touchcancel', onCancel);
                 if (moved) {
-                    const p = psBtnApply(btn, btn.getBoundingClientRect().left, btn.getBoundingClientRect().top);
+                    // Commit transform to real position, then clear it.
+                    const r = btn.getBoundingClientRect();
+                    btn.style.transform = '';
+                    const p = psBtnApply(btn, r.left, r.top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
                     psTel('UP moved ✓ saved ' + p.x + ',' + p.y);
@@ -159,6 +176,7 @@
                         btn.style.outline = 'none';
                     }, 350);
                 } else {
+                    btn.style.transform = '';
                     psTel('UP no-move (tap) ' + psBtnRectTxt());
                 }
             };
