@@ -59,14 +59,6 @@
             e.preventDefault();
             e.stopPropagation();
             const now = Date.now();
-            // Forensics toast: WHY is this click running? dragged flag, guard
-            // window, time since the last suppression.
-            try {
-                if (typeof window.toastr !== 'undefined') {
-                    window.toastr.info('📱 click: dragged=' + (btn.__psDragged ? 1 : 0)
-                        + ' guard=' + (now < (btn.__psClickGuardUntil || 0) ? 1 : 0));
-                }
-            } catch (_e) { /* ignore */ }
             // A completed drag fires (possibly multiple) clicks on release —
             // suppress them, plus a 500ms guard window so Kiwi's touch→mouse
             // compat double-click can't slip in AFTER the first suppression
@@ -85,27 +77,10 @@
         // plus a touch-event fallback for browsers without PointerEvent.
         // touch-action:none stops the browser hijacking the drag for scroll.
         btn.dataset.psDrag = 'v2';
-        if (!btn.__psToastShown) {
-            btn.__psToastShown = true;
-            if (typeof window.toastr !== 'undefined') {
-                try { window.toastr.info('📱 launcher v2 — drag me anywhere'); } catch (_e) { /* ignore */ }
-            }
-            console.log('[PhoneSocial] launcher v2 (draggable) active');
-        }
-        // TEMP telemetry (remove once drag is confirmed): toasts every gesture
-        // stage so the user can read back exactly what the browser fires.
-        let psTelLast = 0;
-        const psTel = (msg) => {
-            const now = Date.now();
-            if (now - psTelLast < 250) return;
-            psTelLast = now;
-            console.log('[PhoneSocial]', msg);
-            try { if (typeof window.toastr !== 'undefined') window.toastr.info('📱 ' + msg); } catch (_e) { /* ignore */ }
-        };
-        const psBtnRectTxt = () => {
-            const r = btn.getBoundingClientRect();
-            return 'rect=' + Math.round(r.left) + ',' + Math.round(r.top);
-        };
+        // Draggable launcher — pointer events with DOCUMENT-level move/up
+        // listeners so the drag survives the finger leaving the small button,
+        // plus a touch-event fallback for browsers without PointerEvent.
+        // touch-action:none stops the browser hijacking the drag for scroll.
         const psStartDrag = (clientX, clientY) => {
             // Kill any leaked previous session FIRST — two live drag sessions
             // (one from an earlier gesture whose pointerup was missed) fight
@@ -113,31 +88,14 @@
             if (btn.__psCleanup) {
                 try { btn.__psCleanup(); } catch (_e) { /* ignore */ }
                 btn.__psCleanup = null;
-                psTel('(killed stale drag session)');
             }
-            // Forensics: is the element under the finger the element we move?
-            let hitInfo = 'hit=?';
-            try {
-                const hit = document.elementFromPoint(clientX, clientY);
-                hitInfo = 'hit=' + (hit ? hit.tagName + '#' + (hit.id || hit.className || '') : 'none')
-                    + (hit === btn ? ' (==btn)' : ' (≠btn!)');
-            } catch (_e) { /* ignore */ }
-            const vv = window.visualViewport;
-            psTel('down @' + Math.round(clientX) + ',' + Math.round(clientY) + ' ' + psBtnRectTxt()
-                + ' dpr=' + (window.devicePixelRatio || 1)
-                + ' zoom=' + (vv && vv.scale ? vv.scale.toFixed(2) : '1')
-                + ' ' + hitInfo);
             btn.__psDragged = false;
             const startX = clientX;
             const startY = clientY;
             // Move via transform during the gesture (GPU layer, immune to any
             // left/top override); commit to left/top on release.
-            const rect0 = btn.getBoundingClientRect();
-            const baseLeft = rect0.left;
-            const baseTop = rect0.top;
             btn.style.transform = 'translate(0px, 0px)';
             let moved = false;
-            let lastTel = 0;
             const onMove = (ev) => {
                 const dx = ev.clientX - startX;
                 const dy = ev.clientY - startY;
@@ -147,19 +105,8 @@
                     btn.__psDragged = true;
                     btn.__psClickGuardUntil = Date.now() + 500;
                     btn.style.transition = 'none';
-                    btn.style.borderColor = '#ff00ff'; // drag engaged marker
-                    btn.style.outline = '3px solid #ff00ff';
-                    psTel('drag started (moving now)');
                 }
                 btn.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-                const now = Date.now();
-                if (now - lastTel > 900) {
-                    lastTel = now;
-                    const r = btn.getBoundingClientRect();
-                    psTel('finger ' + Math.round(dx) + ',' + Math.round(dy)
-                        + ' btnΔ ' + Math.round(r.left - baseLeft) + ',' + Math.round(r.top - baseTop)
-                        + ' ' + psBtnRectTxt());
-                }
                 if (ev.cancelable) ev.preventDefault();
             };
             const onMoveTouch = (ev) => {
@@ -184,18 +131,11 @@
                     const p = psBtnApply(btn, r.left, r.top);
                     psBtnPos = p;
                     psBtnSavePos(p.x, p.y);
-                    psTel('UP moved ✓ saved ' + p.x + ',' + p.y);
-                    setTimeout(() => {
-                        btn.style.borderColor = '#fff';
-                        btn.style.outline = 'none';
-                    }, 350);
                 } else {
                     btn.style.transform = '';
-                    psTel('UP no-move (tap) ' + psBtnRectTxt());
                 }
             };
             const onCancel = () => {
-                psTel('gesture CANCELED by browser');
                 onUp();
             };
             // Register BOTH pointer and touch: browsers fire both for a touch;
