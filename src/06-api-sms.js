@@ -257,8 +257,18 @@
             console.log(`[PhoneSocial] 🔑 using custom API: ${s.apiUrl} | model: ${s.model || 'gpt-4o-mini'} | contact: ${contact.name}`);
             // Build API URL candidates (UIE-style: tries /chat/completions, /v1/chat/completions, etc.)
             const rawUrl = ((s.apiUrl && s.apiUrl !== 'undefined' && s.apiUrl !== 'null') ? s.apiUrl : 'https://api.openai.com/v1').trim().replace(/[\r\n\s]+/g, '').replace(/\/+$/, '');
-            const model = s.model || 'gpt-4o-mini';
-            const promptTemplate = s.systemPromptTemplate || 'You are {char}, responding via text message. Keep replies short and in character.';
+            // Settings panels have saved the literal strings 'undefined'/'null' before —
+            // treat those (and blanks) as unset, or the system prompt becomes the word
+            // 'undefined' and the model never writes a text message.
+            const _clean = (v) => (typeof v === 'string' && v.trim() && v !== 'undefined' && v !== 'null') ? v.trim() : '';
+            const model = _clean(s.model) || 'gpt-4o-mini';
+            // Free tiers rotate their model catalogue — a name that worked last week
+            // can vanish ('not available or misspelled'), which silently kills every
+            // proactive text. Retry down this chain before giving up on the API path.
+            const _modelChain = [model, 'deepseek-v4-flash:free', 'gemini-2.5-flash:free',
+                'mistral-small-2603:free', 'glm-4.7-flash:free']
+                .filter((v, idx, arr) => v && arr.indexOf(v) === idx);
+            const promptTemplate = _clean(s.systemPromptTemplate) || 'You are {char}, responding via text message. Keep replies short and in character.';
             const charName = contact.name;
             const systemPrompt = promptTemplate.replace(/\{char\}/g, charName) +
                 (npcDescription ? `\n\n${npcDescription}` : '') +
@@ -286,31 +296,55 @@
                 }
             }
 
-            for (const url of urlCandidates) {
-                try {
-                    const userContent = hasImages
-                        ? [{ type: 'text', text: userMsg }, ...imageParts]
-                        : userMsg;
-                    const body = { model, messages: [
+            // Free tiers rate-limit aggressively (LiteRouter: 5s between messages).
+            // A rate-limit reply is waited out and retried once instead of being
+            // treated as 'model unavailable' and dropping the text entirely.
+            const _attemptApi = async (url) => {
+                const userContent = hasImages
+                    ? [{ type: 'text', text: userMsg }, ...imageParts]
+                    : userMsg;
+                for (const m of _modelChain) {
+                    const body = { model: m, messages: [
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userContent },
                     ], max_tokens: 300, temperature: 0.8 };
-                    const res = await fetch(url, {
-                        method: 'POST', headers, body: JSON.stringify(body),
-                    });
-                    if (!res.ok) {
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                        const res = await fetch(url, {
+                            method: 'POST', headers, body: JSON.stringify(body),
+                        });
+                        if (res.ok) {
+                            const data = await res.json().catch(() => null);
+                            if (!data) break;
+                            // Extract text from various response formats (chat, text, Anthropic, Gemini)
+                            const text = extractApiReply(data);
+                            if (text) {
+                                if (m !== model) console.warn('[PhoneSocial] model "' + model + '" unavailable — fell back to "' + m + '"');
+                                return stripNamePrefix(text, contact.name);
+                            }
+                            break;
+                        }
                         const errText = await res.text().catch(() => '');
-                        console.warn(`[PhoneSocial] API error (${res.status}) at ${url}:`, errText.slice(0, 200));
-                        continue;
+                        console.warn(`[PhoneSocial] API error (${res.status}) at ${url} [${m}]:`, errText.slice(0, 200));
+                        // Model gone from the catalogue -> try the next model, don't retry this one.
+                        if (/not available|misspelled|unknown model|model.*not.*found|invalid model/i.test(errText)) break;
+                        const rateLimited = /rate[\s_-]*limit|too many requests|seconds? between messages/i.test(errText);
+                        if (rateLimited && attempt === 0) {
+                            console.warn('[PhoneSocial] rate limited — waiting 6s, retrying once');
+                            await new Promise(r => setTimeout(r, 6000));
+                            continue;
+                        }
+                        break;
                     }
-                    const data = await res.json().catch(() => null);
-                    if (!data) continue;
-                    // Extract text from various response formats (chat, text, Anthropic, Gemini)
-                    const text = extractApiReply(data);
-                    if (text) return stripNamePrefix(text, contact.name);
+                }
+                return null;
+            };
+
+            for (const url of urlCandidates) {
+                try {
+                    const out = await _attemptApi(url);
+                    if (out) return out;
                 } catch (e) {
                     console.warn(`[PhoneSocial] fetch failed for ${url}:`, e?.message || e);
-                    continue;
                 }
             }
             console.warn('[PhoneSocial] all API endpoints failed — falling back to ST generateQuietPrompt');
@@ -325,8 +359,8 @@
             const stOrigin = window.location.origin || 'http://localhost:8000';
             // Build concise chat messages
             const charDesc = npcDescription ? npcDescription.slice(0, 300) : '';
-            const memSnippet = npcMemories ? npcMemories.replace(/^\\n\\n/, '').slice(0, 300) : '';
-            const chatSnippet = mainChatContext ? mainChatContext.replace(/^\\n\\n/, '').slice(0, 400) : '';
+            const memSnippet = npcMemories ? npcMemories.replace(/^\n\n/, '').slice(0, 300) : '';
+            const chatSnippet = mainChatContext ? mainChatContext.replace(/^\n\n/, '').slice(0, 400) : '';
             const convoSnippet = conversation.slice(-500);
 
             const systemMsg = [
@@ -338,7 +372,7 @@
                     : 'CRITICAL: Reply with ONLY the SMS text. No narration, no stage directions, no asterisks, no commentary about the scene. Just what you would type on a phone.',
             ].filter(Boolean).join(' ');
 
-            const userMsg = [
+            const proxyUserMsg = [
                 memSnippet ? 'You remember: ' + memSnippet : '',
                 chatSnippet ? 'Recent events: ' + chatSnippet : '',
                 'SMS conversation with ' + myName + ':',
@@ -349,10 +383,47 @@
             ].filter(Boolean).join('\n');
 
             const stUserContent = hasImages
-                ? [{ type: 'text', text: userMsg }, ...imageParts]
-                : userMsg;
+                ? [{ type: 'text', text: proxyUserMsg }, ...imageParts]
+                : proxyUserMsg;
+
+            // ── ST requires a CSRF token on POST. ST's config has
+            //    disableCsrfProtection:false, so a bare fetch is rejected with
+            //    403 'Invalid CSRF token' before it ever reaches a model. ──
+            let csrf = '';
+            try {
+                const tr = await fetch(stOrigin + '/csrf-token', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' },
+                    credentials: 'same-origin',
+                });
+                if (tr.ok) {
+                    const td = await tr.json().catch(() => null);
+                    csrf = (td && td.token) || '';
+                }
+            } catch (e) {
+                console.warn('[PhoneSocial] csrf-token fetch failed:', e?.message || e);
+            }
+
+            // ── The proxy must be told which backend to route to. Without
+            //    chat_completion_source it answers 400 {"error":true}. ──
+            let stSource = 'openai';
+            let stModel = '';
+            try {
+                const ccs = (ctx && ctx.chatCompletionSettings)
+                    || (typeof window !== 'undefined' && window.oai_settings)
+                    || null;
+                if (ccs) {
+                    stSource = ccs.chat_completion_source || stSource;
+                    stModel = ccs[stSource + '_model'] || ccs.openai_model || '';
+                }
+            } catch (_) { /* ignore */ }
+
+            const proxyHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+            if (csrf) proxyHeaders['X-CSRF-Token'] = csrf;
 
             const body = JSON.stringify({
+                chat_completion_source: stSource,
+                model: stModel || undefined,
                 messages: [
                     { role: 'system', content: systemMsg },
                     { role: 'user', content: stUserContent }
@@ -362,18 +433,16 @@
                 stream: false
             });
 
-            // Try ST's chat-completions proxy endpoint
+            // The router is mounted at /api/backends/chat-completions with the POST
+            // route '/generate'. The bare mount path and /api/generate are NOT routes
+            // and return 404 — the old fallback chain could never have succeeded.
             const urls = [
+                stOrigin + '/api/backends/chat-completions/generate',
                 stOrigin + '/api/backends/chat-completions',
-                stOrigin + '/api/generate',
             ];
             for (const url of urls) {
                 try {
-                    const res = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body
-                    });
+                    const res = await fetch(url, { method: 'POST', headers: proxyHeaders, body });
                     if (!res.ok) { console.warn('[PhoneSocial] ST proxy ' + res.status + ' at ' + url); continue; }
                     const data = await res.json().catch(() => null);
                     const text = extractApiReply(data);

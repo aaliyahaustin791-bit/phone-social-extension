@@ -55,7 +55,10 @@
             const ctx = getCtx();
             if (!ctx?.chat) return;
             const contacts = state.contacts;
-            if (!contacts.length || !state.settings.autoReplies) return;
+            // NOTE: deliberately no contacts.length guard — the UIE-style scan below
+            // CREATES contacts from narration. Requiring one first deadlocked it:
+            // no contacts -> early return -> no contact can ever be discovered.
+            if (!state.settings.autoReplies) return;
             if (state.userDnd) return;
 
             // ── Scan last 6 messages (both AI and user), newest first ──
@@ -69,7 +72,7 @@
             const groupPhoneRe = /\b(your\s+(family|parents?|siblings?|friends?|crew|squad|team|group|folks?|people)\s+(has|have|is|are|been|keep|keeps)\s+(texting|calling|messaging|trying\s+to\s+reach|blowing\s+up|hitting\s+up|contacting|checking\s+in|reaching\s+out))\b/i;
 
             // ── Pattern 3: User answering a call ──
-            const userAnswerRe = /(I\s+(pick\s+up|answer|grab)\s+(the\s+)?(phone|call)|(pick up|answer|get)\s+(the\s+)?phone|(accept|take)\s+the\s+call)/i;
+            const userAnswerRe = /\b(I\s+(pick\s+up|answer|grab)\s+(the\s+)?(phone|call)|(pick up|answer|get)\s+(the\s+)?phone|(accept|take)\s+the\s+call)\b/i;
 
             // ── UIE-STYLE NARRATION SCAN ─────────────────────────────────
             // Before checking contacts, scan the raw AI narration for phone events.
@@ -281,6 +284,9 @@
             if (triggeredContacts.length > 2) triggeredContacts = triggeredContacts.slice(0, 2);
 
             // ── Execute: trigger calls/texts from matched contacts ──
+            // Burst sends are spaced 6s apart: free API tiers (LiteRouter) allow only
+            // ~5s between messages, so two simultaneous generations silently lose one.
+            let triggerBurstIndex = 0;
             for (const c of triggeredContacts) {
                 const personality = inferPersonality(c);
                 // Was this an EXPLICIT phone event? Only UIE tags ([UIE_CALL]/[UIE_TEXT])
@@ -306,13 +312,19 @@
                     continue;
                 }
 
-                if (shouldCall) {
-                    // Only explicit phone events bypass simulateIncomingCall's own
-                    // last-line presence defense. Loose cues let it run for safety.
-                    simulateIncomingCall(c, { skipPresenceCheck: isExplicitPhoneEvent });
-                } else {
-                    simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: isExplicitPhoneEvent });
-                }
+                // Space burst sends out so the 2nd NPC isn't lost to the rate limit.
+                const _burstDelay = triggerBurstIndex * 6000;
+                triggerBurstIndex++;
+                const _fire = () => {
+                    if (shouldCall) {
+                        // Only explicit phone events bypass simulateIncomingCall's own
+                        // last-line presence defense. Loose cues let it run for safety.
+                        simulateIncomingCall(c, { skipPresenceCheck: isExplicitPhoneEvent });
+                    } else {
+                        simulateProactiveText(c, { type: 'narrative_cue', intensity: 'medium' }, { skipPresenceCheck: isExplicitPhoneEvent });
+                    }
+                };
+                if (_burstDelay > 0) setTimeout(_fire, _burstDelay); else _fire();
             }
         } catch (e) {
             console.warn('[PhoneSocial] checkNarrativeTriggers error:', e);
